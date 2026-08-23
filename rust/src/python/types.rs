@@ -125,11 +125,14 @@ impl PyAgentEvent {
         }
     }
 
-    /// Get the message content (for MessageEnd events).
+    /// Get the message content (for MessageEnd / AgentEnd events).
     #[getter]
     fn content(&self) -> Option<String> {
         match &self.inner {
             crate::agent::AgentEvent::MessageEnd { message, .. } => {
+                Some(message.content.clone())
+            }
+            crate::agent::AgentEvent::AgentEnd { message, .. } => {
                 Some(message.content.clone())
             }
             crate::agent::AgentEvent::StreamToken { token, .. } => Some(token.clone()),

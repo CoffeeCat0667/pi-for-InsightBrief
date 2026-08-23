@@ -99,6 +99,7 @@ class Session:
         """等待并返回完整回复文本。
 
         跳过工具调用轮的空 message_end，只在收到有实际内容的回复时返回。
+        message_end 的 content 不会重复拼接（StreamToken 已累积完整内容）。
         """
         parts: list[str] = []
         start = time.time()
@@ -112,12 +113,14 @@ class Session:
             elif event.event_type == "message_end":
                 content = event.content or ""
                 if content:
-                    parts.append(content)
+                    # message_end.content 与 StreamToken 累积内容相同，不重复拼接
+                    if not parts:
+                        parts.append(content)
                     break
                 # 空 content = 工具调用轮次，继续等下一轮
             elif event.event_type == "agent_end":
                 content = event.content or ""
-                if content:
+                if content and not parts:
                     parts.append(content)
                 break
         return "".join(parts)
@@ -126,6 +129,7 @@ class Session:
         """流式等待回复，yield 每个 token，最终 return 完整回复。
 
         跳过工具调用轮的空 message_end，只在收到有实际内容的回复时终止。
+        message_end 的 content 不会重复拼接（StreamToken 已累积完整内容）。
         """
         parts: list[str] = []
         start = time.time()
@@ -141,12 +145,14 @@ class Session:
             elif event.event_type == "message_end":
                 content = event.content or ""
                 if content:
-                    parts.append(content)
+                    # message_end.content 与 StreamToken 累积内容相同，不重复拼接
+                    if not parts:
+                        parts.append(content)
                     break
                 # 空 content = 工具调用轮次，继续等下一轮
             elif event.event_type == "agent_end":
                 content = event.content or ""
-                if content:
+                if content and not parts:
                     parts.append(content)
                 break
         return "".join(parts)
