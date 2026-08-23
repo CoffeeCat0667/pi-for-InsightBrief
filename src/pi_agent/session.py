@@ -96,7 +96,10 @@ class Session:
         return self._buffer.get()
 
     def wait_response(self, timeout: float = 300.0) -> str:
-        """等待并返回完整回复文本。"""
+        """等待并返回完整回复文本。
+
+        跳过工具调用轮的空 message_end，只在收到有实际内容的回复时返回。
+        """
         parts: list[str] = []
         start = time.time()
         while time.time() - start < timeout:
@@ -110,7 +113,8 @@ class Session:
                 content = event.content or ""
                 if content:
                     parts.append(content)
-                break
+                    break
+                # 空 content = 工具调用轮次，继续等下一轮
             elif event.event_type == "agent_end":
                 content = event.content or ""
                 if content:
@@ -119,7 +123,10 @@ class Session:
         return "".join(parts)
 
     def wait_response_stream(self, timeout: float = 300.0) -> Generator[str, None, str]:
-        """流式等待回复，yield 每个 token，最终 return 完整回复。"""
+        """流式等待回复，yield 每个 token，最终 return 完整回复。
+
+        跳过工具调用轮的空 message_end，只在收到有实际内容的回复时终止。
+        """
         parts: list[str] = []
         start = time.time()
         while time.time() - start < timeout:
@@ -135,7 +142,8 @@ class Session:
                 content = event.content or ""
                 if content:
                     parts.append(content)
-                break
+                    break
+                # 空 content = 工具调用轮次，继续等下一轮
             elif event.event_type == "agent_end":
                 content = event.content or ""
                 if content:
