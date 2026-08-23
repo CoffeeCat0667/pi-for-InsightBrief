@@ -635,12 +635,14 @@ fn serialize_conversation_for_compaction(entries: &[&Entry]) -> String {
 }
 
 /// Truncate a string to max_chars, adding an ellipsis note if truncated.
+/// Uses character boundaries to avoid panicking on multi-byte UTF-8.
 fn truncate_str(s: &str, max_chars: usize) -> String {
-    if s.len() <= max_chars {
+    if s.chars().count() <= max_chars {
         s.to_string()
     } else {
-        let truncated = &s[..max_chars];
-        format!("{}\n\n[... {} more characters truncated]", truncated, s.len() - max_chars)
+        let truncated: String = s.chars().take(max_chars).collect();
+        let remaining = s.chars().count() - max_chars;
+        format!("{}\n\n[... {} more characters truncated]", truncated, remaining)
     }
 }
 
