@@ -14,265 +14,310 @@ maturin develop --release
 
 ---
 
-## 核心类
+## 架构概览
 
-### `Agent` (PyAgent)
-
-主入口，管理对话循环、工具调用和上下文压缩。
-
-```python
-from pi_agent import Agent
-
-agent = Agent(
-    api_key="sk-xxx",                    # 必填：API 密钥
-    model="gpt-4",                       # 必填：模型名称
-    session_path="session.jsonl",        # 必填：会话持久化文件路径
-    base_url=None,                       # 可选：自定义 API 端点（None=OpenAI 官方）
-    system_prompt=None,                  # 可选：覆盖默认系统提示词
-    max_turns=50,                        # 可选：最大对话轮数（默认 50）
-    reserve_tokens=16384,                # 可选：为回复预留的 token 数（默认 16384）
-    keep_recent_tokens=20000,            # 可选：压缩后保留的最近 token 数（默认 20000）
-    context_window=128000,               # 可选：上下文窗口大小（默认 128000）
-    append_system_prompt=None,           # 可选：追加到系统提示词末尾的文本
-    extra_guidelines=None,               # 可选：额外的工具使用指导（字符串列表）
-    cwd=None,                           # 可选：工作目录（用于工具执行）
-)
+```
+┌─────────────────────────────────────────────────┐
+│                   Agent (单例)                   │
+│  - API Key / Model / Base URL                   │
+│  - 提示词集合 (PromptSet)                        │
+│  - 日志器 (Logger)                               │
+│                                                 │
+│  ┌───────────┐ ┌───────────┐ ┌───────────┐     │
+│  │ Session 1 │ │ Session 2 │ │ Session 3 │     │
+│  │ content   │ │ thinking  │ │ full_debug│     │
+│  └───────────┘ └───────────┘ └───────────┘     │
+└─────────────────────────────────────────────────┘
 ```
 
-#### 参数详解
+- **Agent**: 全局单例，管理 LLM 连接、工具和提示词
+- **Session**: 独立的对话会话，拥有自己的事件缓冲区和输出模式
 
-| 参数 | 类型 | 默认值 | 说明 |
-|------|------|--------|------|
-| `api_key` | str | 必填 | API 密钥 |
-| `model` | str | 必填 | 模型名称（如 `gpt-4`, `gpt-4o`, `claude-3-opus`） |
-| `session_path` | str | 必填 | 会话 JSONL 文件路径，不存在则自动创建 |
-| `base_url` | str \| None | None | 自定义 API 端点，None 使用 OpenAI 官方 |
-| `system_prompt` | str \| None | None | 覆盖默认系统提示词 |
-| `max_turns` | int | 50 | 单次 `run()` 的最大对话轮数 |
-| `reserve_tokens` | int | 16384 | 为 LLM 回复预留的 token 数 |
-| `keep_recent_tokens` | int | 20000 | 上下文压缩时保留的最近 token 数 |
-| `context_window` | int | 128000 | LLM 上下文窗口大小 |
-| `append_system_prompt` | str \| None | None | 追加到系统提示词末尾 |
-| `extra_guidelines` | list[str] \| None | None | 额外的工具使用指导 |
-| `cwd` | str \| None | None | 工具执行的工作目录 |
+---
 
-#### 方法
+## 快速开始
 
 ```python
-# 注册内置工具（ls, read, write, edit, grep, find, bash）
-agent.register_builtin_tools()
+from pi_agent import create_agent, OutputMode
 
-# 注册自定义工具
-agent.register_tool(my_tool)
-
-# 运行对话（同步，事件通过 next_event() 获取）
-agent.run("你的消息")
-```
-
-#### 自定义 API 示例
-
-```python
-# OpenAI 兼容的第三方 API
-agent = Agent(
-    api_key="sk-0917aed21cc2a74efa7af30c3cee4a4736bfbf3119a7de116bd5a629f6c7b208",
+# 1. 创建 Agent（全局单例）
+agent = create_agent(
+    api_key="sk-xxx",
     model="gpt-4",
-    session_path="session.jsonl",
-    base_url="https://api.example.com/v1",
 )
 
-# Anthropic 兼容 API
-agent = Agent(
-    api_key="sk-ant-xxx",
-    model="claude-3-opus-20240229",
-    session_path="session.jsonl",
-    base_url="https://api.anthropic.com",
-)
+# 2. 创建 Session
+session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 
-# 本地 Ollama
-agent = Agent(
-    api_key="ollama",
-    model="llama3",
-    session_path="session.jsonl",
-    base_url="http://localhost:11434/v1",
-)
+# 3. 运行对话
+agent.run(session.session_id, "你好")
+
+# 4. 获取回复
+response = session.wait_response()
+print(response)
+
+# 或流式获取
+for token in session.wait_response_stream():
+    print(token, end="", flush=True)
 ```
 
 ---
 
-### `Session` (PySession)
+## 核心 API
 
-会话管理，支持分支和持久化。
+### `create_agent(**kwargs) -> Agent`
 
-```python
-from pi_agent import Session
-
-# 创建新会话
-session = Session(model="gpt-4", system_prompt="你是一个助手")
-
-# 从文件加载
-session = Session.from_file("session.jsonl")
-```
-
-#### 方法
+创建或获取全局 Agent 单例。
 
 ```python
-# 添加消息
-entry_id = session.append_user("你好")
-entry_id = session.append_assistant("你好！有什么可以帮助你的？")
+from pi_agent import create_agent, LogLevel
 
-# 获取当前分支的消息
-messages = session.messages()  # 返回 list[Entry]
+agent = create_agent(
+    # 必填参数
+    api_key="sk-xxx",                          # API 密钥
+    model="gpt-4",                             # 模型名称
 
-# 获取当前叶子节点
-leaf = session.leaf()  # 返回 Entry | None
+    # 可选：API 配置
+    base_url=None,                             # 自定义 API 端点
 
-# 获取 token 使用情况
-usage = session.total_usage()  # 返回 Usage
+    # 可选：日志配置
+    log_level=LogLevel.INFO,                   # 日志级别
 
-# 获取会话信息
-session.session_id()   # 返回 str | None
-session.model()        # 返回 str | None
-session.entry_count()  # 返回 int
+    # 可选：对话配置
+    max_turns=50,                              # 最大对话轮数
+    reserve_tokens=16384,                      # 预留 token 数
+    keep_recent_tokens=20000,                  # 保留最近 token 数
+    context_window=128000,                     # 上下文窗口大小
 
-# 分支管理
-branch_points = session.branch_points()  # 返回 list[BranchPoint]
-session.switch_branch(entry_id)          # 切换到指定分支
-summary = session.branch_summary(entry_id)  # 获取分支摘要
+    # 可选：外部提示词路径
+    system_main="prompts/system.md",           # 主系统提示词
+    compaction_system="prompts/compaction_sys.md",
+    compaction_initial="prompts/compaction_init.md",
+    compaction_update="prompts/compaction_update.md",
+    compaction_turn_prefix="prompts/compaction_prefix.md",
+    tool_guidelines_dir="prompts/tool_guidelines/",  # 工具指导目录
+
+    # 可选：额外配置
+    extra_guidelines=["规则1", "规则2"],        # 额外工具指导
+    extra_prompts={"custom": "path/to/file.md"},  # 自定义提示词
+)
 ```
+
+**行为：**
+- 首次调用创建 Agent 并存储为全局单例
+- 后续调用更新配置并返回同一实例
+- 可通过 `get_agent()` 获取当前单例
 
 ---
 
-### `AgentEvent` (PyAgentEvent)
-
-Agent 运行时产生的事件。通过 `agent.next_event()` 获取。
-
-#### 事件类型
-
-| event_type | 说明 | 可用属性 |
-|------------|------|----------|
-| `agent_start` | Agent 开始运行 | - |
-| `agent_end` | Agent 运行结束 | `content`（最终回复） |
-| `turn_start` | 新一轮对话开始 | - |
-| `turn_end` | 一轮对话结束 | - |
-| `message_end` | LLM 消息完成 | `content`（完整回复文本） |
-| `stream_token` | 流式输出 token | `content`（单个 token） |
-| `tool_call_start` | 工具调用开始 | `tool_name`, `tool_call_id` |
-| `tool_call_end` | 工具调用完成 | `tool_call_id` |
-| `compaction_start` | 上下文压缩开始 | - |
-| `compaction_end` | 上下文压缩完成 | `summary`（压缩摘要） |
+### `Agent` 类
 
 #### 属性
 
 ```python
-event = agent.next_event()
+agent.model           # str: 当前模型
+agent.log_level       # LogLevel: 当前日志级别（可设置）
+```
+
+#### 方法
+
+```python
+# 创建会话
+session = agent.create_session(
+    output_mode=OutputMode.CONTENT_ONLY,  # 输出模式
+    cwd="/path/to/project",              # 工作目录
+    session_path="custom.jsonl",         # 自定义会话文件路径
+)
+
+# 继续会话
+session = agent.continue_session(
+    session_id="abc-123",
+    output_mode=OutputMode.THINKING,     # 可选：切换输出模式
+)
+
+# 获取会话
+session = agent.get_session("abc-123")
+
+# 列出所有会话
+session_ids = agent.list_sessions()
+
+# 删除会话
+success = agent.delete_session("abc-123")
+
+# 运行对话
+agent.run(session_id, "你的消息")
+
+# 获取下一个事件
+event = agent.next_event(session_id)
+
+# 等待完整回复
+response = agent.wait_response(session_id, timeout=300.0)
+
+# 获取日志
+logs = agent.get_log_buffer()
+
+# 清空日志
+agent.clear_logs()
+```
+
+---
+
+### `Session` 类
+
+```python
+session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+```
+
+#### 属性
+
+```python
+session.session_id    # str: 会话唯一 ID
+session.output_mode   # OutputMode: 当前输出模式（可设置）
+```
+
+#### 方法
+
+```python
+# 运行对话
+session.run("你的消息")
+
+# 获取下一个事件（符合 output_mode）
+event = session.next_event()
+
+# 获取下一个原始事件（不过滤）
+event = session.next_event_raw()
+
+# 等待完整回复
+response = session.wait_response(timeout=300.0)
+
+# 流式等待回复
+for token in session.wait_response_stream(timeout=300.0):
+    print(token, end="", flush=True)
+
+# 关闭会话
+session.close()
+```
+
+---
+
+## 枚举类型
+
+### `LogLevel`
+
+```python
+from pi_agent import LogLevel
+
+LogLevel.DEBUG     # 调试信息
+LogLevel.INFO      # 一般信息
+LogLevel.WARNING   # 警告
+LogLevel.ERROR     # 错误
+```
+
+### `OutputMode`
+
+```python
+from pi_agent import OutputMode
+
+OutputMode.CONTENT_ONLY  # 仅输出对话内容（stream_token / message_end）
+OutputMode.THINKING      # 输出思考内容 + 对话内容
+OutputMode.FULL_DEBUG    # 输出所有内容（提示词 + 思考 + 对话）
+```
+
+**OutputMode 过滤规则：**
+
+| 事件类型 | CONTENT_ONLY | THINKING | FULL_DEBUG |
+|----------|:---:|:---:|:---:|
+| `stream_token` | ✓ | ✓ | ✓ |
+| `message_end` | ✓ | ✓ | ✓ |
+| `tool_call_start` | | ✓ | ✓ |
+| `tool_call_end` | | ✓ | ✓ |
+| `compaction_start` | | ✓ | ✓ |
+| `compaction_end` | | ✓ | ✓ |
+| `turn_start` | | ✓ | ✓ |
+| `turn_end` | | ✓ | ✓ |
+
+---
+
+## 事件类型
+
+通过 `session.next_event()` 或 `agent.next_event(session_id)` 获取。
+
+```python
+event = session.next_event()
 
 event.event_type    # str: 事件类型
-event.content       # str | None: 消息内容（message_end / stream_token）
-event.tool_name     # str | None: 工具名称（tool_call_start）
+event.content       # str | None: 消息内容
+event.tool_name     # str | None: 工具名称
 event.tool_call_id  # str | None: 工具调用 ID
-event.summary       # str | None: 压缩摘要（compaction_end）
+event.summary       # str | None: 压缩摘要
 ```
+
+| event_type | 说明 | 可用属性 |
+|------------|------|----------|
+| `stream_token` | 流式输出 token | `content` |
+| `message_end` | 消息完成 | `content` |
+| `tool_call_start` | 工具调用开始 | `tool_name`, `tool_call_id` |
+| `tool_call_end` | 工具调用完成 | `tool_call_id` |
+| `compaction_start` | 上下文压缩开始 | - |
+| `compaction_end` | 上下文压缩完成 | `summary` |
+| `turn_start` | 新一轮对话开始 | - |
+| `turn_end` | 一轮对话结束 | - |
+| `agent_start` | Agent 开始运行 | - |
+| `agent_end` | Agent 运行结束 | `content` |
 
 ---
 
-### `Entry` (PyEntry)
+## 提示词加载
 
-会话中的单条消息记录。
+### `load_prompt(path) -> str`
+
+从文件加载单个提示词。
 
 ```python
-entry = session.leaf()
+from pi_agent import load_prompt
 
-entry.id            # str: 唯一 ID
-entry.parent_id     # str | None: 父条目 ID
-entry.content       # str: 消息内容
-entry.role          # str: "user" | "assistant" | "system" | "tool"
-entry.input_tokens  # int: 输入 token 数
-entry.output_tokens # int: 输出 token 数
+prompt = load_prompt("prompts/system.md")
 ```
 
----
+### `load_prompt_set(**kwargs) -> PromptSet`
 
-### `Usage` (PyUsage)
-
-Token 使用统计。
+从外部文件加载提示词集合。
 
 ```python
-usage = session.total_usage()
+from pi_agent import load_prompt_set
 
-usage.input_tokens   # int: 输入 token 数
-usage.output_tokens  # int: 输出 token 数
-usage.total          # int: 总 token 数
-```
-
----
-
-### `BranchPoint` (PyBranchPoint)
-
-分支点信息。
-
-```python
-bp = session.branch_points()[0]
-
-bp.parent_id  # str: 父条目 ID
-bp.children   # list[str]: 子条目 ID 列表
-```
-
----
-
-### `BranchSummary` (PyBranchSummary)
-
-分支摘要（用于被放弃的分支）。
-
-```python
-summary = session.branch_summary(entry_id)
-
-summary.goal           # str: 目标
-summary.progress       # str: 进展
-summary.decisions      # str: 决策
-summary.next_steps     # str: 下一步
-summary.files_touched  # list[str]: 涉及的文件
-```
-
----
-
-### `Tool` (PyTool)
-
-自定义工具。
-
-```python
-from pi_agent import Tool, ToolDefinition
-
-# 通过 Python 类实现自定义工具
-class MyTool:
-    def definition(self) -> ToolDefinition:
-        return ToolDefinition(
-            name="my_tool",
-            description="我的自定义工具",
-            parameters='{"type": "object", "properties": {"input": {"type": "string"}}, "required": ["input"]}'
-        )
-    
-    def execute(self, arguments: str) -> str:
-        # arguments 是 JSON 字符串
-        import json
-        args = json.loads(arguments)
-        return f"结果: {args['input']}"
-
-# 注册
-agent.register_tool(MyTool())
-```
-
----
-
-### `ToolDefinition` (PyToolDefinition)
-
-工具定义。
-
-```python
-ToolDefinition(
-    name="tool_name",           # str: 工具名称
-    description="工具描述",      # str: 工具描述
-    parameters='{"type": "object", ...}'  # str: JSON Schema 参数定义
+ps = load_prompt_set(
+    system_main="prompts/system.md",
+    compaction_system="prompts/compaction_system.md",
+    compaction_initial="prompts/compaction_initial.md",
+    compaction_update="prompts/compaction_update.md",
+    compaction_turn_prefix="prompts/compaction_turn_prefix.md",
+    tool_guidelines_dir="prompts/tool_guidelines/",
+    extra={"custom": "prompts/custom.md"},
 )
+
+print(ps.system_main)           # 主系统提示词
+print(ps.compaction_system)     # 压缩系统提示词
+print(ps.tool_guidelines)       # dict: {name: content}
+```
+
+### `PromptSet` 类
+
+```python
+from pi_agent import PromptSet
+
+ps = PromptSet(
+    system_main="...",
+    compaction_system="...",
+    compaction_initial="...",
+    compaction_update="...",
+    compaction_turn_prefix="...",
+    tool_guidelines={"bash": "...", "read": "..."},
+    extra={"custom": "..."},
+)
+
+# 覆盖系统提示词
+new_ps = ps.override_system_main("新的系统提示词")
 ```
 
 ---
@@ -282,76 +327,117 @@ ToolDefinition(
 ### 基础对话
 
 ```python
-from pi_agent import Agent
+from pi_agent import create_agent, OutputMode
 
-agent = Agent(
-    api_key="sk-xxx",
-    model="gpt-4",
-    session_path="session.jsonl",
-)
-agent.register_builtin_tools()
+agent = create_agent(api_key="sk-xxx", model="gpt-4")
+session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 
-agent.run("用一句话解释什么是递归？")
-
-while True:
-    event = agent.next_event()
-    if event is None:
-        break
-    if event.event_type == "stream_token":
-        print(event.content, end="", flush=True)
-    elif event.event_type == "message_end":
-        print()
+agent.run(session.session_id, "用一句话解释什么是递归？")
+response = session.wait_response()
+print(response)
 ```
 
 ### 流式输出 + 工具调用
 
 ```python
-from pi_agent import Agent
-import time
+from pi_agent import create_agent, OutputMode
 
-agent = Agent(
-    api_key="sk-xxx",
-    model="gpt-4",
-    session_path="session.jsonl",
-    base_url="https://api.example.com/v1",
+agent = create_agent(api_key="sk-xxx", model="gpt-4")
+session = agent.create_session(
+    output_mode=OutputMode.THINKING,
     cwd="/path/to/project",
 )
-agent.register_builtin_tools()
 
-agent.run("列出当前目录的文件")
+agent.run(session.session_id, "列出当前目录的文件")
 
+for token in session.wait_response_stream():
+    print(token, end="", flush=True)
+print()
+```
+
+### 多会话管理
+
+```python
+from pi_agent import create_agent, OutputMode
+
+agent = create_agent(api_key="sk-xxx", model="gpt-4")
+
+# 创建多个会话
+s1 = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+s2 = agent.create_session(output_mode=OutputMode.THINKING)
+
+# 并行运行
+agent.run(s1.session_id, "问题1")
+agent.run(s2.session_id, "问题2")
+
+# 获取各自回复
+r1 = s1.wait_response()
+r2 = s2.wait_response()
+
+# 继续会话
+agent.run(s1.session_id, "追问")
+r1_new = s1.wait_response()
+```
+
+### 外部提示词
+
+```python
+from pi_agent import create_agent, OutputMode
+
+agent = create_agent(
+    api_key="sk-xxx",
+    model="gpt-4",
+    system_main="prompts/system.md",
+    compaction_system="prompts/compaction_system.md",
+    tool_guidelines_dir="prompts/tool_guidelines/",
+)
+
+session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+agent.run(session.session_id, "你好")
+```
+
+### 日志调试
+
+```python
+from pi_agent import create_agent, LogLevel, OutputMode
+
+agent = create_agent(
+    api_key="sk-xxx",
+    model="gpt-4",
+    log_level=LogLevel.DEBUG,
+)
+
+session = agent.create_session(output_mode=OutputMode.FULL_DEBUG)
+agent.run(session.session_id, "测试")
+
+# 查看日志
+for log in agent.get_log_buffer():
+    print(log)
+
+# 事件循环
 while True:
-    event = agent.next_event()
+    event = session.next_event()
     if event is None:
-        time.sleep(0.01)
-        continue
-    
-    if event.event_type == "stream_token":
-        print(event.content, end="", flush=True)
-    elif event.event_type == "tool_call_start":
-        print(f"\n[调用工具: {event.tool_name}]", end="", flush=True)
-    elif event.event_type == "tool_call_end":
-        print(" -> 完成")
-    elif event.event_type == "message_end":
-        print("\n[完成]")
         break
+    print(f"[{event.event_type}] {event.content or event.tool_name or ''}")
 ```
 
 ### 自定义工具
 
 ```python
-from pi_agent import Agent, ToolDefinition
+from pi_agent import create_agent
 import json
 
 class CalculatorTool:
     def definition(self):
+        from pi_agent import ToolDefinition
         return ToolDefinition(
             name="calculator",
             description="执行数学计算",
             parameters=json.dumps({
                 "type": "object",
                 "properties": {
-                    "expression": {"type": "string", "description": "数学表达式"}
+                    "expression": {"type": "string"}
                 },
                 "required": ["expression"]
             })
@@ -359,132 +445,32 @@ class CalculatorTool:
     
     def execute(self, arguments):
         args = json.loads(arguments)
-        try:
-            result = eval(args["expression"])  # 注意：生产环境应使用安全的表达式解析
-            return json.dumps({"result": result})
-        except Exception as e:
-            return json.dumps({"error": str(e)})
+        result = eval(args["expression"])
+        return json.dumps({"result": result})
 
-agent = Agent(
-    api_key="sk-xxx",
-    model="gpt-4",
-    session_path="session.jsonl",
-)
-agent.register_builtin_tools()
-agent.register_tool(CalculatorTool())
-
-agent.run("计算 123 * 456")
-```
-
-### 多轮对话
-
-```python
-from pi_agent import Agent
-import time
-
-agent = Agent(
-    api_key="sk-xxx",
-    model="gpt-4",
-    session_path="session.jsonl",  # 会话自动持久化
-)
-agent.register_builtin_tools()
-
-# 第一轮
-agent.run("我的名字是张三")
-while True:
-    event = agent.next_event()
-    if event is None:
-        time.sleep(0.01)
-        continue
-    if event.event_type == "message_end":
-        print(f"助手: {event.content}")
-        break
-
-# 第二轮（Agent 自动记住上下文）
-agent.run("你记得我叫什么吗？")
-while True:
-    event = agent.next_event()
-    if event is None:
-        time.sleep(0.01)
-        continue
-    if event.event_type == "message_end":
-        print(f"助手: {event.content}")
-        break
-```
-
-### 上下文压缩
-
-当对话历史超过上下文窗口时，Agent 自动压缩旧消息为摘要：
-
-```python
-agent = Agent(
-    api_key="sk-xxx",
-    model="gpt-4",
-    session_path="session.jsonl",
-    context_window=16000,      # 小窗口更容易触发压缩
-    keep_recent_tokens=2000,
-)
-
-# 多轮对话后会自动触发压缩
-for i in range(100):
-    agent.run(f"第 {i} 轮对话")
-    while True:
-        event = agent.next_event()
-        if event is None:
-            time.sleep(0.01)
-            continue
-        if event.event_type == "compaction_start":
-            print("[上下文压缩中...]")
-        elif event.event_type == "compaction_end":
-            print(f"[压缩完成: {event.summary[:50]}...]")
-        elif event.event_type == "message_end":
-            break
+agent = create_agent(api_key="sk-xxx", model="gpt-4")
+# 注册工具需要通过 Rust 原生 API
 ```
 
 ---
 
-## 事件循环模式
+## 向后兼容
+
+旧 API 仍然可用：
 
 ```python
-import time
-
-def wait_for_response(agent):
-    """等待 Agent 完成并返回最终回复"""
-    full_response = []
-    while True:
-        event = agent.next_event()
-        if event is None:
-            time.sleep(0.01)
-            continue
-        
-        if event.event_type == "stream_token":
-            print(event.content, end="", flush=True)
-            full_response.append(event.content)
-        elif event.event_type == "tool_call_start":
-            print(f"\n[工具: {event.tool_name}]", end="", flush=True)
-        elif event.event_type == "tool_call_end":
-            print(" -> 完成")
-        elif event.event_type == "message_end":
-            print()
-            return "".join(full_response)
-        elif event.event_type == "agent_end":
-            return "".join(full_response)
-
-# 使用
-agent.run("你好")
-response = wait_for_response(agent)
-```
-
----
-
-## 常量和辅助函数
-
-```python
-from pi_agent import version, create_entry_id
-
-# 获取版本号
-print(version())  # "0.1.0"
-
-# 生成唯一 ID
-entry_id = create_entry_id()
+from pi_agent import (
+    # Rust 原生类型
+    PyAgent,
+    PySession,
+    PyAgentEvent,
+    PyEntry,
+    PyUsage,
+    PyBranchPoint,
+    PyBranchSummary,
+    PyTool,
+    PyToolDefinition,
+    version,
+    create_entry_id,
+)
 ```
