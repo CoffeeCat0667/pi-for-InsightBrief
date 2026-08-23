@@ -122,6 +122,7 @@ impl PyAgentEvent {
             crate::agent::AgentEvent::CompactionStart { .. } => "compaction_start",
             crate::agent::AgentEvent::CompactionEnd { .. } => "compaction_end",
             crate::agent::AgentEvent::StreamToken { .. } => "stream_token",
+            crate::agent::AgentEvent::Debug { .. } => "debug",
         }
     }
 
@@ -170,6 +171,33 @@ impl PyAgentEvent {
     fn summary(&self) -> Option<String> {
         match &self.inner {
             crate::agent::AgentEvent::CompactionEnd { summary, .. } => Some(summary.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get the debug event source.
+    #[getter]
+    fn source(&self) -> Option<String> {
+        match &self.inner {
+            crate::agent::AgentEvent::Debug { source, .. } => Some(source.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get the debug event level.
+    #[getter]
+    fn level(&self) -> Option<String> {
+        match &self.inner {
+            crate::agent::AgentEvent::Debug { level, .. } => Some(level.clone()),
+            _ => None,
+        }
+    }
+
+    /// Get the debug event message.
+    #[getter]
+    fn debug_message(&self) -> Option<String> {
+        match &self.inner {
+            crate::agent::AgentEvent::Debug { message, .. } => Some(message.clone()),
             _ => None,
         }
     }

@@ -1,12 +1,12 @@
 # Pi Agent API Reference
 
-当前文档对应 `v0.1.2`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
+当前文档对应 `v0.1.4`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
 
 ## 安装
 
 ```bash
 # Windows x64 wheel，兼容 Python 3.10+
-pip install pi_agent-0.1.2-cp310-abi3-win_amd64.whl
+pip install pi_agent-0.1.4-cp310-abi3-win_amd64.whl
 
 # 从源码构建
 maturin develop --release
@@ -264,6 +264,9 @@ event.content         # str | None
 event.tool_name       # str | None
 event.tool_call_id    # str | None
 event.summary         # str | None
+event.source          # str | None: debug event source
+event.level           # str | None: debug level
+event.debug_message   # str | None: debug message
 ```
 
 | `event_type` | 说明 | 可用属性 |
@@ -278,6 +281,7 @@ event.summary         # str | None
 | `tool_call_end` | 工具调用完成 | `tool_call_id` |
 | `compaction_start` | 上下文压缩开始 | 无额外属性 |
 | `compaction_end` | 上下文压缩完成 | `summary` |
+| `debug` | Rust/LLM 诊断信息，仅 FULL_DEBUG 返回 | `source`, `level`, `debug_message` |
 
 ## 提示词
 

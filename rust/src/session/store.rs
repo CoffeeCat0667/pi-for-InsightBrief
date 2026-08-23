@@ -104,7 +104,7 @@ impl SessionStore {
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
 
-        for (line_num, line) in reader.lines().enumerate() {
+        for line in reader.lines() {
             let line = line?;
             let line = line.trim();
             if line.is_empty() {
@@ -127,7 +127,7 @@ impl SessionStore {
                     store.compactions.push(compaction);
                 }
                 _ => {
-                    eprintln!("Warning: unknown line type at line {}", line_num + 1);
+                    // Ignore unknown records so newer session formats remain readable.
                 }
             }
         }

@@ -50,7 +50,12 @@ class Session:
         if self._closed:
             raise RuntimeError(f"Session {self._session_id} is closed")
 
-        self._native_agent.run(prompt)
+        try:
+            self._native_agent.run(prompt)
+        except Exception:
+            # Preserve diagnostics emitted before a native request failed.
+            self._drain_native_events()
+            raise
 
         if self._session_data is not None:
             self._session_data[self._session_id] = json.loads(

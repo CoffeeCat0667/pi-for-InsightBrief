@@ -101,9 +101,11 @@ impl PyAgent {
 
         rt.block_on(async {
             // Create LLM client with custom base_url
+            let (event_sender, event_receiver) = broadcast::channel(10000);
             let llm_client = Arc::new(LlmClient::new(
                 api_key.to_string(),
                 base_url.map(|s| s.to_string()),
+                Some(event_sender.clone()),
             ));
 
             // Create or load the session from in-memory Python data.
@@ -133,9 +135,6 @@ impl PyAgent {
                 });
             }
             let session = Arc::new(tokio::sync::Mutex::new(session_store));
-
-            // Create event channel - large capacity to avoid dropping stream tokens
-            let (event_sender, event_receiver) = broadcast::channel(10000);
 
             // Build prompt set with optional overrides
             let mut prompt_set = crate::agent::PromptSet::defaults();

@@ -63,6 +63,15 @@ pub enum AgentEvent {
         /// The token text.
         token: String,
     },
+    /// Diagnostic information for FULL_DEBUG consumers.
+    Debug {
+        /// Component that emitted the diagnostic.
+        source: String,
+        /// Diagnostic level.
+        level: String,
+        /// Human-readable diagnostic message.
+        message: String,
+    },
 }
 
 /// Configuration for the agent loop.

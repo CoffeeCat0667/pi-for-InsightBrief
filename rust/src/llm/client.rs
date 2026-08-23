@@ -1,7 +1,9 @@
 use std::time::Duration;
 
 use reqwest::Client;
+use tokio::sync::broadcast;
 
+use crate::agent::AgentEvent;
 use super::types::{ChatCompletionRequest, ChatCompletionResponse, ChatCompletionChunk};
 
 /// Error type for LLM operations.
@@ -30,11 +32,17 @@ pub struct LlmClient {
     api_key: String,
     /// Base URL for the API.
     base_url: String,
+    /// Event sink for structured diagnostics.
+    debug_sender: Option<broadcast::Sender<AgentEvent>>,
 }
 
 impl LlmClient {
     /// Create a new LLM client with 5-minute timeout for long contexts.
-    pub fn new(api_key: String, base_url: Option<String>) -> Self {
+    pub fn new(
+        api_key: String,
+        base_url: Option<String>,
+        debug_sender: Option<broadcast::Sender<AgentEvent>>,
+    ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .connect_timeout(Duration::from_secs(30))
@@ -45,6 +53,17 @@ impl LlmClient {
             client,
             api_key,
             base_url: base_url.unwrap_or_else(|| "https://api.openai.com/v1".to_string()),
+            debug_sender,
+        }
+    }
+
+    fn debug(&self, level: &str, message: String) {
+        if let Some(sender) = &self.debug_sender {
+            let _ = sender.send(AgentEvent::Debug {
+                source: "llm".to_string(),
+                level: level.to_string(),
+                message,
+            });
         }
     }
 
@@ -54,7 +73,7 @@ impl LlmClient {
         request: &ChatCompletionRequest,
     ) -> LlmResult<ChatCompletionResponse> {
         let url = format!("{}/chat/completions", self.base_url);
-        eprintln!("[LLM] POST {} (model={}, messages={}, stream=false)", url, request.model, request.messages.len());
+        self.debug("debug", format!("POST {} (model={}, messages={}, stream=false)", url, request.model, request.messages.len()));
 
         let response = self
             .client
@@ -68,7 +87,7 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            eprintln!("[LLM] ERROR HTTP {}: {}", status, &body[..body.len().min(200)]);
+            self.debug("error", format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()));
             return Err(LlmError::Api(format!(
                 "HTTP {}: {}",
                 status, body
@@ -76,7 +95,7 @@ impl LlmClient {
         }
 
         let response: ChatCompletionResponse = response.json().await?;
-        eprintln!("[LLM] OK, {} choices", response.choices.len());
+        self.debug("debug", format!("Response received: {} choices", response.choices.len()));
         Ok(response)
     }
 
@@ -86,7 +105,7 @@ impl LlmClient {
         request: &ChatCompletionRequest,
     ) -> LlmResult<reqwest::Response> {
         let url = format!("{}/chat/completions", self.base_url);
-        eprintln!("[LLM] POST {} (model={}, messages={}, stream=true)", url, request.model, request.messages.len());
+        self.debug("debug", format!("POST {} (model={}, messages={}, stream=true)", url, request.model, request.messages.len()));
 
         let mut request = request.clone();
         request.stream = Some(true);
@@ -103,14 +122,14 @@ impl LlmClient {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            eprintln!("[LLM] ERROR HTTP {}: {}", status, &body[..body.len().min(200)]);
+            self.debug("error", format!("HTTP {}: {}", status, body.chars().take(200).collect::<String>()));
             return Err(LlmError::Api(format!(
                 "HTTP {}: {}",
                 status, body
             )));
         }
 
-        eprintln!("[LLM] Stream connected, status={}", response.status());
+        self.debug("debug", format!("Stream connected, status={}", response.status()));
         Ok(response)
     }
 

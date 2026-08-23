@@ -272,9 +272,27 @@ impl AgentLoop {
                 }
             }
 
-            eprintln!("[Stream] Done: {} chunks, {} chars, tool_calls={}", chunk_count, full_content.len(), tool_calls.is_some());
+            let _ = self.event_sender.send(AgentEvent::Debug {
+                source: "agent.stream".to_string(),
+                level: "debug".to_string(),
+                message: format!(
+                    "Stream complete: {} chunks, {} chars, tool_calls={}",
+                    chunk_count,
+                    full_content.len(),
+                    tool_calls.is_some()
+                ),
+            });
             if let Some(ref tc) = tool_calls {
-                eprintln!("[Stream] Tool calls: {:?}", tc.iter().map(|t| (&t.function.name, t.function.arguments.len())).collect::<Vec<_>>());
+                let _ = self.event_sender.send(AgentEvent::Debug {
+                    source: "agent.stream".to_string(),
+                    level: "debug".to_string(),
+                    message: format!(
+                        "Tool calls collected: {:?}",
+                        tc.iter()
+                            .map(|t| (&t.function.name, t.function.arguments.len()))
+                            .collect::<Vec<_>>()
+                    ),
+                });
             }
 
             let parsed_tool_calls = tool_calls;
@@ -298,7 +316,11 @@ impl AgentLoop {
                 session.append(entry)?
             };
 
-            eprintln!("[Stream] Message saved, entry_id={}", assistant_entry);
+            let _ = self.event_sender.send(AgentEvent::Debug {
+                source: "session".to_string(),
+                level: "debug".to_string(),
+                message: format!("Assistant message saved, entry_id={}", assistant_entry),
+            });
 
             // Emit message end
             let _ = self.event_sender.send(AgentEvent::MessageEnd {
