@@ -48,6 +48,8 @@ pub struct SessionStore {
     pub leaf: Option<EntryId>,
     /// File handle for append writes.
     file: Option<File>,
+    /// Whether this store is backed only by in-memory data.
+    in_memory: bool,
 }
 
 impl SessionStore {
@@ -61,6 +63,7 @@ impl SessionStore {
             roots: Vec::new(),
             leaf: None,
             file: None,
+            in_memory: false,
         }
     }
 
@@ -136,6 +139,61 @@ impl SessionStore {
         store.ensure_file()?;
 
         Ok(store)
+    }
+
+    /// Create a session store from an in-memory session object.
+    ///
+    /// The object uses the same logical records as the JSONL format:
+    /// `{ "header": ..., "entries": [...], "compactions": [...] }`.
+    pub fn from_data(data: serde_json::Value) -> SessionResult<Self> {
+        let object = data
+            .as_object()
+            .ok_or_else(|| SessionError::InvalidSession("session data must be an object".to_string()))?;
+
+        let mut store = Self::new("");
+        store.in_memory = true;
+
+        if let Some(header) = object.get("header") {
+            store.header = Some(serde_json::from_value(header.clone())?);
+        }
+
+        if let Some(entries) = object.get("entries") {
+            let entries: Vec<Entry> = serde_json::from_value(entries.clone())?;
+            for entry in entries {
+                store.entries.insert(entry.id, entry);
+            }
+        }
+
+        if let Some(compactions) = object.get("compactions") {
+            store.compactions = serde_json::from_value(compactions.clone())?;
+        }
+
+        store.rebuild_tree();
+
+        if let Some(leaf) = object.get("leaf").and_then(|value| value.as_str()) {
+            let leaf = leaf
+                .parse::<EntryId>()
+                .map_err(|_| SessionError::InvalidSession("invalid leaf ID".to_string()))?;
+            if store.entries.contains_key(&leaf) {
+                store.leaf = Some(leaf);
+            }
+        }
+
+        Ok(store)
+    }
+
+    /// Export the complete in-memory session tree.
+    pub fn to_data(&self) -> serde_json::Value {
+        let mut entries: Vec<Entry> = self.entries.values().cloned().collect();
+        entries.sort_by(|a, b| a.created_at.cmp(&b.created_at));
+
+        serde_json::json!({
+            "header": self.header,
+            "entries": entries,
+            "compactions": self.compactions,
+            "roots": self.roots,
+            "leaf": self.leaf,
+        })
     }
 
     /// Rebuild the tree structure from entries.
@@ -228,6 +286,9 @@ impl SessionStore {
 
     /// Append an entry to the JSONL file.
     fn append_to_file(&mut self, entry: &Entry) -> SessionResult<()> {
+        if self.in_memory {
+            return Ok(());
+        }
         // Ensure file exists and header is written
         if self.file.is_none() {
             self.ensure_file()?;
@@ -491,6 +552,10 @@ impl SessionStore {
 
     /// Save an entry directly (for compaction).
     pub fn save_entry(&mut self, entry: Entry) -> SessionResult<()> {
+        if self.in_memory {
+            self.entries.insert(entry.id, entry);
+            return Ok(());
+        }
         self.ensure_file()?;
 
         if let Some(ref mut file) = self.file {
@@ -505,6 +570,10 @@ impl SessionStore {
 
     /// Save a compaction entry.
     pub fn save_compaction(&mut self, compaction: CompactionEntry) -> SessionResult<()> {
+        if self.in_memory {
+            self.compactions.push(compaction);
+            return Ok(());
+        }
         self.ensure_file()?;
 
         if let Some(ref mut file) = self.file {

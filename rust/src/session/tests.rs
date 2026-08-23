@@ -140,3 +140,35 @@ fn test_branch_summary_generation() {
     let _ = fs::remove_file(&test_file);
     let _ = fs::remove_dir(&temp_dir);
 }
+
+#[test]
+fn test_in_memory_session_round_trip() {
+    let mut store = SessionStore::from_data(serde_json::json!({
+        "header": {
+            "session_id": uuid::Uuid::new_v4(),
+            "created_at": chrono::Utc::now(),
+            "model": "gpt-4o",
+            "system_prompt": null
+        },
+        "entries": [],
+        "compactions": []
+    }))
+    .unwrap();
+
+    let user_id = store
+        .append(Entry::new_user("你好".to_string(), None))
+        .unwrap();
+    let assistant_id = store
+        .append(Entry::new_assistant("你好，有什么可以帮你？".to_string(), None))
+        .unwrap();
+    let data = store.to_data();
+
+    assert_eq!(data["leaf"], assistant_id.to_string());
+    assert_eq!(data["entries"].as_array().unwrap().len(), 2);
+    assert!(!store.path.exists());
+
+    let loaded = SessionStore::from_data(data).unwrap();
+    assert_eq!(loaded.leaf().unwrap().id, assistant_id);
+    assert_eq!(loaded.branch().first().unwrap().id, user_id);
+    assert_eq!(loaded.branch().len(), 2);
+}

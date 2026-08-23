@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import os
+import json
 import threading
 import uuid
 from pathlib import Path
@@ -45,6 +45,7 @@ class Agent:
         tool_guidelines_dir: str | Path | None = None,
         extra_prompts: dict[str, str | Path] | None = None,
         extra_guidelines: list[str] | None = None,
+        sessions: dict[str, dict[str, Any]] | None = None,
     ):
         self._api_key = api_key
         self._model = model
@@ -54,6 +55,7 @@ class Agent:
         self._keep_recent_tokens = keep_recent_tokens
         self._context_window = context_window
         self._extra_guidelines = extra_guidelines or []
+        self._session_data = sessions if sessions is not None else {}
 
         # 日志
         self._log = Logger(level=log_level, buffer=log_buffer)
@@ -90,28 +92,26 @@ class Agent:
     def create_session(
         self,
         *,
+        session_id: str | None = None,
         output_mode: OutputMode = OutputMode.CONTENT_ONLY,
         cwd: str | None = None,
-        session_path: str | None = None,
     ) -> Session:
         """创建新会话，返回 Session 对象。"""
-        session_id = str(uuid.uuid4())
-
-        if session_path is None:
-            script_dir = Path(__file__).parent
-            sessions_dir = script_dir / "sessions"
-            sessions_dir.mkdir(exist_ok=True)
-            session_path = str(sessions_dir / f"{session_id}.jsonl")
+        session_id = session_id or str(uuid.uuid4())
+        self._session_data.setdefault(session_id, {})
 
         self._log.info("Agent", f"Creating session {session_id}")
 
         # 创建 Rust native agent
-        native_agent = self._create_native_agent(session_path, cwd)
+        native_agent = self._create_native_agent(session_id, cwd)
+
+        self._session_data[session_id] = json.loads(native_agent.export_session_data())
 
         session = Session(
             session_id=session_id,
             native_agent=native_agent,
             output_mode=output_mode,
+            session_data=self._session_data,
         )
 
         with self._lock:
@@ -182,7 +182,7 @@ class Agent:
         """注册内置工具到所有后续创建的 session。"""
         self._log.info("Agent", "Builtin tools registered (ls, read, write, edit, grep, find, bash)")
 
-    def _create_native_agent(self, session_path: str, cwd: str | None) -> Any:
+    def _create_native_agent(self, session_id: str, cwd: str | None) -> Any:
         """创建底层 Rust agent 实例。"""
         from importlib import import_module
         _native = import_module("pi_agent.pi_agent")
@@ -191,7 +191,8 @@ class Agent:
         kwargs: dict[str, Any] = {
             "api_key": self._api_key,
             "model": self._model,
-            "session_path": session_path,
+            "session_id": session_id,
+            "session_data": self._session_data,
             "base_url": self._base_url,
             "max_turns": self._max_turns,
             "reserve_tokens": self._reserve_tokens,
@@ -239,6 +240,8 @@ def create_agent(**kwargs: Any) -> Agent:
             _agent_instance._api_key = kwargs.get("api_key", _agent_instance._api_key)
             _agent_instance._model = kwargs.get("model", _agent_instance._model)
             _agent_instance._base_url = kwargs.get("base_url", _agent_instance._base_url)
+            if "sessions" in kwargs and kwargs["sessions"] is not None:
+                _agent_instance._session_data = kwargs["sessions"]
             if "log_level" in kwargs:
                 _agent_instance.log_level = kwargs["log_level"]
             if "system_main" in kwargs or "tool_guidelines_dir" in kwargs:

@@ -7,7 +7,7 @@ from pi_agent import Agent
 agent = Agent(
     api_key="sk-0917aed21cc2a74efa7af30c3cee4a4736bfbf3119a7de116bd5a629f6c7b208",
     model="gpt-5.6-luna",
-    session_path=".venv/stream_test.jsonl",
+    session_id="stream-test",
     base_url="https://sub2api.aimeta.store/v1",
     system_prompt="You are a helpful assistant.",
     max_turns=3,

@@ -77,6 +77,11 @@ impl AgentLoop {
         self.tool_registry.register(tool);
     }
 
+    /// Export the current session tree for the Python in-memory API.
+    pub async fn export_session_data(&self) -> serde_json::Value {
+        self.session.lock().await.to_data()
+    }
+
     /// Build the system prompt from the current config and tool registry.
     fn build_system_prompt_text(&self, context_files: &[(String, String)]) -> String {
         let tool_names: Vec<String> = self

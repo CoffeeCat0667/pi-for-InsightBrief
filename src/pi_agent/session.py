@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import time
+import json
 from typing import Any, Generator
 
 from .event_buffer import EventBuffer
@@ -24,10 +25,12 @@ class Session:
         session_id: str,
         native_agent: Any,
         output_mode: OutputMode = OutputMode.CONTENT_ONLY,
+        session_data: dict[str, dict[str, Any]] | None = None,
     ):
         self._session_id = session_id
         self._native_agent = native_agent
         self._buffer = EventBuffer(output_mode)
+        self._session_data = session_data
         self._closed = False
 
     @property
@@ -48,6 +51,11 @@ class Session:
             raise RuntimeError(f"Session {self._session_id} is closed")
 
         self._native_agent.run(prompt)
+
+        if self._session_data is not None:
+            self._session_data[self._session_id] = json.loads(
+                self._native_agent.export_session_data()
+            )
 
         # 将 Rust agent 的事件倒入缓冲区
         self._drain_native_events()

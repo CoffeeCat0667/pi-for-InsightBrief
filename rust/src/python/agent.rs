@@ -1,10 +1,11 @@
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
 use crate::agent::{AgentEvent, AgentLoop, AgentLoopConfig};
 use crate::llm::LlmClient;
-use crate::session::SessionStore;
+use crate::session::{Header, SessionStore};
 use crate::tools::{Tool, ToolDefinition};
 
 use super::types::PyAgentEvent;
@@ -78,11 +79,13 @@ pub struct PyAgent {
 impl PyAgent {
     /// Create a new agent.
     #[new]
-    #[pyo3(signature = (api_key, model, session_path, base_url=None, system_prompt=None, max_turns=None, reserve_tokens=None, keep_recent_tokens=None, context_window=None, append_system_prompt=None, extra_guidelines=None, cwd=None))]
+    #[pyo3(signature = (api_key, model, session_id, session_data=None, base_url=None, system_prompt=None, max_turns=None, reserve_tokens=None, keep_recent_tokens=None, context_window=None, append_system_prompt=None, extra_guidelines=None, cwd=None))]
     fn new(
+        py: Python<'_>,
         api_key: &str,
         model: &str,
-        session_path: &str,
+        session_id: &str,
+        session_data: Option<&Bound<'_, PyDict>>,
         base_url: Option<&str>,
         system_prompt: Option<&str>,
         max_turns: Option<u32>,
@@ -103,11 +106,33 @@ impl PyAgent {
                 base_url.map(|s| s.to_string()),
             ));
 
-            // Create or load session
-            let session = Arc::new(tokio::sync::Mutex::new(
-                SessionStore::load(session_path)
-                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyIOError, _>(e.to_string()))?
-            ));
+            // Create or load the session from in-memory Python data.
+            let session_json = if let Some(data) = session_data {
+                let value = data
+                    .get_item(session_id)
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?
+                    .ok_or_else(|| PyErr::new::<pyo3::exceptions::PyKeyError, _>(session_id.to_string()))?;
+                let json_module = py.import("json")?;
+                json_module
+                    .call_method1("dumps", (value,))?
+                    .extract::<String>()
+                    .map_err(|e| PyErr::new::<pyo3::exceptions::PyTypeError, _>(e.to_string()))?
+            } else {
+                "{}".to_string()
+            };
+
+            let mut session_store = SessionStore::from_data(serde_json::from_str(&session_json)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?)
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))?;
+            if session_store.header.is_none() {
+                session_store.header = Some(Header {
+                    session_id: session_id.parse().unwrap_or_else(|_| uuid::Uuid::new_v4()),
+                    created_at: chrono::Utc::now(),
+                    model: model.to_string(),
+                    system_prompt: system_prompt.map(str::to_string),
+                });
+            }
+            let session = Arc::new(tokio::sync::Mutex::new(session_store));
 
             // Create event channel - large capacity to avoid dropping stream tokens
             let (event_sender, event_receiver) = broadcast::channel(10000);
@@ -176,6 +201,17 @@ impl PyAgent {
         }
     }
 
+    /// Export the complete current session tree as JSON.
+    fn export_session_data(&self) -> PyResult<String> {
+        let rt = tokio::runtime::Runtime::new()
+            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        rt.block_on(async {
+            let data = self.inner.export_session_data().await;
+            serde_json::to_string(&data)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyValueError, _>(e.to_string()))
+        })
+    }
+
     /// Register a tool.
     fn register_tool(&mut self, tool: PyTool) {
         self.inner.register_tool(Box::new(PyToolWrapper(tool)));
@@ -213,5 +249,3 @@ impl Tool for PyToolWrapper {
             .map_err(|e| crate::tools::ToolError::ExecutionError(e.to_string()))
     }
 }
-
-

@@ -25,7 +25,7 @@ def basic_openai():
     agent = Agent(
         api_key=os.environ["OPENAI_API_KEY"],
         model="gpt-4o",
-        session_path="session.jsonl",
+        session_id="integration-basic",
         system_prompt="你是一个有用的助手。",
     )
     
@@ -50,7 +50,7 @@ def custom_api():
     agent = Agent(
         api_key="your-api-key",
         model="gpt-4o",
-        session_path="session.jsonl",
+        session_id="integration-custom-api",
         base_url="https://api.your-provider.com/v1",  # 自定义端点
         system_prompt="你是一个有用的助手。",
     )
@@ -69,7 +69,7 @@ def azure_openai():
     agent = Agent(
         api_key=os.environ["AZURE_OPENAI_API_KEY"],
         model="gpt-4",  # Azure 部署名称
-        session_path="session.jsonl",
+        session_id="integration-streaming",
         base_url=f"{os.environ['AZURE_OPENAI_ENDPOINT']}/openai/deployments/your-deployment",
         system_prompt="你是一个有用的助手。",
     )
@@ -88,7 +88,7 @@ def local_model_ollama():
     agent = Agent(
         api_key="ollama",  # Ollama 不需要真实 key
         model="llama3",  # 本地模型名称
-        session_path="session.jsonl",
+        session_id="integration-tools",
         base_url="http://localhost:11434/v1",  # Ollama 默认端点
         system_prompt="你是一个有用的助手。",
     )
@@ -103,7 +103,7 @@ def local_model_vllm():
     agent = Agent(
         api_key="vllm",  # vLLM 不需要真实 key
         model="meta-llama/Llama-3-8B-Instruct",
-        session_path="session.jsonl",
+        session_id="integration-context",
         base_url="http://localhost:8000/v1",  # vLLM 默认端点
         system_prompt="你是一个有用的助手。",
     )
@@ -144,7 +144,7 @@ def custom_tool_usage():
     agent = Agent(
         api_key=os.environ["OPENAI_API_KEY"],
         model="gpt-4o",
-        session_path="session.jsonl",
+        session_id="integration-error",
     )
     
     agent.register_builtin_tools()

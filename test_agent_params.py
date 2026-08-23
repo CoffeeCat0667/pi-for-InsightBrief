@@ -14,7 +14,7 @@ try:
     agent = Agent(
         api_key="test-key",
         model="gpt-4o",
-        session_path=".venv/test_default.jsonl",
+        session_id="test-default",
     )
     print("[OK] Agent created with default parameters")
 except Exception as e:
@@ -26,7 +26,7 @@ try:
     agent = Agent(
         api_key="test-key",
         model="custom-model",
-        session_path=".venv/test_custom.jsonl",
+        session_id="test-custom",
         base_url="https://custom-api.example.com/v1",
     )
     print("[OK] Agent created with custom base_url")
@@ -39,7 +39,7 @@ try:
     agent = Agent(
         api_key="test-key",
         model="my-model",
-        session_path=".venv/test_all.jsonl",
+        session_id="test-all",
         base_url="https://my-api.com/v1",
         system_prompt="You are a helper.",
         max_turns=10,
