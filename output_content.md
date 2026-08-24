@@ -1,7 +1,7 @@
 # Output Content Format
 
-本文档定义 `Session.next_event()`、`Session.next_event_raw()` 和
-`Session.wait_response_stream()` 可观察到的输出事件。
+本文档定义 `Session.next_event()`、`Session.next_event_raw()`、
+`Session.events()` 和 `Session.wait_response_stream()` 可观察到的输出事件。
 
 ## 事件对象
 
@@ -134,6 +134,7 @@ debug_message: "POST https://api.example.com/v1/chat/completions (model=gpt-4o, 
 | `llm` | LLM 请求、响应、连接和 HTTP 错误 |
 | `agent.stream` | SSE 流处理统计和工具调用收集状态 |
 | `session` | 会话写入等状态 |
+| `agent` | Agent 循环状态（如任务取消） |
 
 当前 `level` 值包括：
 
@@ -162,7 +163,7 @@ debug_message: "POST https://api.example.com/v1/chat/completions (model=gpt-4o, 
 
 ## 最终回答与 DEBUG 分离
 
-`wait_response()` 和 `wait_response_stream()` 只处理：
+`wait_response()`、`wait_response_async()` 和 `wait_response_stream()` 只处理：
 
 ```text
 stream_token
@@ -176,16 +177,12 @@ agent_end
 
 ```python
 session.output_mode = OutputMode.FULL_DEBUG
-agent.run(session.session_id, "你好")
+await agent.run_async(session.session_id, "你好")
 
 debug_events = []
 answer_parts = []
 
-while True:
-    event = session.next_event()
-    if event is None:
-        break
-
+async for event in session.events():
     if event.event_type == "debug":
         debug_events.append({
             "source": event.source,
@@ -199,4 +196,24 @@ final_answer = "".join(answer_parts)
 ```
 
 DEBUG 事件通过 Session 的事件缓冲区返回，不再由 Rust 直接写入控制台。
-即使底层 LLM 请求失败，调用方也可以在捕获 `Session.run()` 异常后读取已经产生的 `debug` 和 `error` 事件。
+即使底层 LLM 请求失败，调用方也可以在捕获 `Session.run_async()` 异常后读取已经产生的 `debug` 和 `error` 事件。
+
+## 异步事件流
+
+v0.1.5 引入真正的异步事件流。Rust Agent loop 在 Tokio 运行时上执行，事件通过
+broadcast channel 实时发送。Python 通过 `events()` 异步迭代器实时接收：
+
+```python
+await session.run_async("你的消息")
+
+async for event in session.events():
+    if event.event_type == "stream_token":
+        print(event.content, end="", flush=True)
+    elif event.event_type == "tool_call_start":
+        print(f"\n[工具: {event.tool_name}]")
+```
+
+`events()` 会在以下情况结束迭代：
+- 收到 `agent_end` 事件
+- 超时（默认 300 秒）
+- 原生 agent 停止运行且缓冲区为空

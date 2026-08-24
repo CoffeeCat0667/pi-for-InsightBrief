@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::broadcast;
 
@@ -25,6 +26,9 @@ pub enum AgentError {
 
     #[error("Stream closed")]
     StreamClosed,
+
+    #[error("Task cancelled")]
+    Cancelled,
 }
 
 pub type AgentResult<T> = Result<T, AgentError>;
@@ -38,11 +42,13 @@ pub struct AgentLoop {
     /// Session store.
     session: Arc<tokio::sync::Mutex<SessionStore>>,
     /// Event sender.
-    event_sender: broadcast::Sender<AgentEvent>,
+    event_sender: Arc<broadcast::Sender<AgentEvent>>,
     /// Tool registry.
     tool_registry: ToolRegistry,
     /// Working directory for the system prompt.
     cwd: String,
+    /// Cancellation flag.
+    cancel_flag: Arc<AtomicBool>,
 }
 
 impl AgentLoop {
@@ -51,7 +57,7 @@ impl AgentLoop {
         config: AgentLoopConfig,
         llm_client: Arc<LlmClient>,
         session: Arc<tokio::sync::Mutex<SessionStore>>,
-        event_sender: broadcast::Sender<AgentEvent>,
+        event_sender: Arc<broadcast::Sender<AgentEvent>>,
     ) -> Self {
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
@@ -64,6 +70,7 @@ impl AgentLoop {
             event_sender,
             tool_registry: ToolRegistry::new(),
             cwd,
+            cancel_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -80,6 +87,16 @@ impl AgentLoop {
     /// Export the current session tree for the Python in-memory API.
     pub async fn export_session_data(&self) -> serde_json::Value {
         self.session.lock().await.to_data()
+    }
+
+    /// Get the cancel flag Arc (for sharing with spawned tasks).
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        self.cancel_flag.clone()
+    }
+
+    /// Check if the task has been cancelled.
+    fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::Relaxed)
     }
 
     /// Build the system prompt from the current config and tool registry.
@@ -102,6 +119,9 @@ impl AgentLoop {
 
     /// Run the agent loop with a user prompt.
     pub async fn run(&self, prompt: &str) -> AgentResult<()> {
+        // Reset cancel flag
+        self.cancel_flag.store(false, Ordering::Relaxed);
+
         // Append user message to session
         let user_entry = {
             let mut session = self.session.lock().await;
@@ -120,6 +140,16 @@ impl AgentLoop {
         // Run the inner loop (tool calls)
         let mut turn = 0;
         loop {
+            // Check for cancellation at each turn boundary
+            if self.is_cancelled() {
+                let _ = self.event_sender.send(AgentEvent::Debug {
+                    source: "agent".to_string(),
+                    level: "info".to_string(),
+                    message: "Task cancelled by user".to_string(),
+                });
+                break;
+            }
+
             turn += 1;
             if turn > self.config.max_turns {
                 return Err(AgentError::MaxTurnsExceeded);
@@ -674,27 +704,6 @@ fn truncate_str(s: &str, max_chars: usize) -> String {
 }
 
 /// Parse a markdown-formatted compaction summary into `CompactionSummary`.
-///
-/// Expected format:
-/// ```text
-/// ## Goal
-/// ...
-/// ## Constraints & Preferences
-/// ...
-/// ## Progress
-/// ...
-/// ## Blockers
-/// ...
-/// ## Decisions
-/// ...
-/// ## Next Steps
-/// ...
-/// ## Critical Context
-/// ...
-/// ## Files
-/// Read: ...
-/// Modified: ...
-/// ```
 fn parse_compaction_summary(content: &str) -> crate::session::CompactionSummary {
     let mut goal = String::new();
     let mut constraints = String::new();

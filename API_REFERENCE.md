@@ -1,12 +1,12 @@
 # Pi Agent API Reference
 
-当前文档对应 `v0.1.4`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
+当前文档对应 `v0.1.5`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
 
 ## 安装
 
 ```bash
 # Windows x64 wheel，兼容 Python 3.10+
-pip install pi_agent-0.1.4-cp310-abi3-win_amd64.whl
+pip install pi_agent-0.1.5-cp310-abi3-win_amd64.whl
 
 # 从源码构建
 maturin develop --release
@@ -26,12 +26,13 @@ create_agent() -> 全局 Agent
 - `Agent` 保存 API 配置、提示词配置和 Session 注册表。
 - `Session` 保存一个独立的 Rust 会话树、事件缓冲区和输出模式。
 - `Agent` 通过 `create_agent()` 获取全局单例；同一 Python 进程内重复调用不会创建第二个 Agent。
-- `Session.run()` 是同步调用。Rust Agent 完成本轮请求后，事件才会被倒入 Python 缓冲区。因此 Python API 当前不是后台实时生产事件的异步接口。
-- `wait_response_stream()` 会逐个 yield 已缓存的 `stream_token`，但不会在底层 HTTP 请求执行期间提前 yield。
+- **v0.1.5 异步架构**：Rust 持久化 Tokio 运行时，`run()` 在后台 Tokio task 上执行并释放 GIL。Python 可在 `run_async()` 期间通过 `events()` 异步迭代实时接收事件。
+- 多 Session 并发：每个 Session 拥有独立的 NativeAgent 和 broadcast channel，可同时运行多个 Session 的请求。
 
 ## 快速开始
 
 ```python
+import asyncio
 from pi_agent import OutputMode, create_agent
 
 agent = create_agent(
@@ -44,18 +45,55 @@ session = agent.create_session(
     session_id="session-001",
     output_mode=OutputMode.CONTENT_ONLY,
 )
-agent.run(session.session_id, "你好")
 
+# 异步用法（推荐）
+async def main():
+    await agent.run_async(session.session_id, "你好")
+    print(session.wait_response())
+
+asyncio.run(main())
+
+# 同步用法（仍然支持）
+agent.run(session.session_id, "你好")
 print(session.wait_response())
 ```
 
-流式读取已缓存的 token：
+异步流式读取：
 
 ```python
-agent.run(session.session_id, "用一句话解释递归")
-for token in session.wait_response_stream():
-    print(token, end="", flush=True)
-print()
+async def stream_example():
+    await agent.run_async(session.session_id, "用一句话解释递归")
+    async for event in session.events():
+        if event.event_type == "stream_token":
+            print(event.content, end="", flush=True)
+    print()
+
+asyncio.run(stream_example())
+```
+
+并发多 Session：
+
+```python
+async def concurrent_example():
+    s1 = agent.create_session()
+    s2 = agent.create_session()
+
+    # 两个 Session 并发运行
+    await asyncio.gather(
+        agent.run_async(s1.session_id, "你好"),
+        agent.run_async(s2.session_id, "世界"),
+    )
+
+    # 实时读取两个 Session 的事件
+    async for event in s1.events():
+        if event.event_type == "stream_token":
+            print(f"S1: {event.content}", end="")
+
+    async for event in s2.events():
+        if event.event_type == "stream_token":
+            print(f"S2: {event.content}", end="")
+
+asyncio.run(concurrent_example())
 ```
 
 ## `create_agent(**kwargs) -> Agent`
@@ -119,21 +157,22 @@ agent.log_level   # LogLevel，可读写
 ### 方法
 
 ```python
-session = agent.create_session(
-    session_id="session-001",
-    output_mode=OutputMode.CONTENT_ONLY,
-    cwd="/path/to/project",
-)
-
+# 同步
 agent.run(session.session_id, "你的消息")
 event = agent.next_event(session.session_id)
 response = agent.wait_response(session.session_id, timeout=300.0)
 
+# 异步（推荐）
+await agent.run_async(session.session_id, "你的消息")
+response = await agent.wait_response_async(session.session_id, timeout=300.0)
+
+# 会话管理
 session = agent.get_session(session_id)       # 不存在时返回 None
 session = agent.continue_session(session_id)  # 仅继续当前进程内已注册的 Session
 session_ids = agent.list_sessions()
 success = agent.delete_session(session_id)
 
+# 日志
 logs = agent.get_log_buffer()
 agent.clear_logs()
 ```
@@ -177,20 +216,19 @@ sessions = {
 }
 ```
 
-每次 `Session.run()` 完成后，当前 Session 的完整树会同步回 `sessions[session_id]`。树中保留 entry 的父子关系、active 分支、leaf、工具调用、usage 和 compaction 信息。调用方可以直接保存、序列化或替换这个字典。
-
-同一个 `sessions` 字典不应被多个线程无锁修改。当前 Python API 的 `run()` 仍是同步调用。
+每次 `Session.run()` 或 `Session.run_async()` 完成后，当前 Session 的完整树会同步回 `sessions[session_id]`。树中保留 entry 的父子关系、active 分支、leaf、工具调用、usage 和 compaction 信息。调用方可以直接保存、序列化或替换这个字典。
 
 ## `Session`
 
 ### 属性
 
 ```python
-session.session_id  # str
-session.output_mode # OutputMode，可读写
+session.session_id   # str
+session.output_mode  # OutputMode，可读写
+session.is_running   # bool：当前是否有任务正在运行
 ```
 
-### 方法
+### 同步方法
 
 ```python
 session.run("你的消息")
@@ -204,9 +242,25 @@ for token in session.wait_response_stream(timeout=300.0):
 session.close()
 ```
 
+### 异步方法
+
+```python
+await session.run_async("你的消息")
+response = await session.wait_response_async(timeout=300.0)
+
+async for event in session.events(timeout=300.0):
+    if event.event_type == "stream_token":
+        print(event.content, end="")
+
+session.cancel()  # 协作式取消
+```
+
 行为说明：
 
-- `run()` 关闭的 Session 会抛出 `RuntimeError`。
+- `run()` / `run_async()` 关闭的 Session 会抛出 `RuntimeError`。
+- `run_async()` 在 Tokio 运行时上执行 Rust Agent loop，不阻塞 Python 事件循环。
+- `events()` 异步迭代器在 `run_async()` 期间实时 yield 事件，直到收到 `agent_end` 或超时。
+- `cancel()` 协作式取消当前运行的任务，任务会完成当前 turn 后停止。
 - `next_event()` 返回符合 `output_mode` 的下一个事件；没有事件时返回 `None`。
 - `next_event_raw()` 返回未过滤事件；没有事件时返回 `None`。
 - `wait_response()` 会跳过工具调用轮次的空 `message_end`，直到收到有内容的消息。
@@ -392,3 +446,4 @@ from pi_agent import (
 - `bash`、`write`、`edit` 等工具拥有本机文件系统和命令执行能力，只应在受信任的工作目录和受控权限下启用。
 - 工具执行没有独立超时；长时间运行的 shell 命令会阻塞当前 Agent 请求。
 - `estimate_tokens()` 使用粗略字符长度估算，实际上下文使用量以 LLM 返回的 usage 为准。
+- 多 Session 并发时，每个 Session 拥有独立的 Tokio task 和 broadcast channel，不会互相干扰。

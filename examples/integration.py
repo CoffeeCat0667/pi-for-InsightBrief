@@ -6,34 +6,39 @@ Pi Agent 集成示例
 
 1. 基础使用
 2. 自定义 API 端点
-3. Azure OpenAI
-4. 本地模型
+3. 异步用法（推荐）
+4. 并发多 Session
 5. 自定义工具
 """
 
+import asyncio
 import os
-from pi_agent import Agent, Session, AgentEvent, Tool, ToolDefinition
+
+from pi_agent import OutputMode, create_agent
 
 
 # ============================================
-# 1. 基础使用（OpenAI API）
+# 1. 基础使用（同步）
 # ============================================
 
-def basic_openai():
-    """使用 OpenAI API"""
-    
-    agent = Agent(
-        api_key=os.environ["OPENAI_API_KEY"],
+def basic_sync():
+    """使用同步 API"""
+
+    agent = create_agent(
+        api_key=os.environ.get("OPENAI_API_KEY", "test-key"),
         model="gpt-4o",
-        session_id="integration-basic",
-        system_prompt="你是一个有用的助手。",
+        sessions={},
     )
-    
-    agent.register_builtin_tools()
-    agent.run("你好！")
-    
+
+    session = agent.create_session(
+        session_id="integration-basic",
+        output_mode=OutputMode.CONTENT_ONLY,
+    )
+
+    agent.run(session.session_id, "你好！")
+
     while True:
-        event = agent.next_event()
+        event = session.next_event()
         if event is None:
             break
         if event.event_type == "message_end":
@@ -46,70 +51,82 @@ def basic_openai():
 
 def custom_api():
     """使用自定义 API 端点（如第三方服务）"""
-    
-    agent = Agent(
+
+    agent = create_agent(
         api_key="your-api-key",
         model="gpt-4o",
+        base_url="https://api.your-provider.com/v1",
+        sessions={},
+    )
+
+    session = agent.create_session(
         session_id="integration-custom-api",
-        base_url="https://api.your-provider.com/v1",  # 自定义端点
-        system_prompt="你是一个有用的助手。",
+        output_mode=OutputMode.CONTENT_ONLY,
     )
-    
-    agent.register_builtin_tools()
-    agent.run("你好！")
+
+    agent.run(session.session_id, "你好！")
 
 
 # ============================================
-# 3. Azure OpenAI
+# 3. 异步用法（推荐）
 # ============================================
 
-def azure_openai():
-    """使用 Azure OpenAI"""
-    
-    agent = Agent(
-        api_key=os.environ["AZURE_OPENAI_API_KEY"],
-        model="gpt-4",  # Azure 部署名称
-        session_id="integration-streaming",
-        base_url=f"{os.environ['AZURE_OPENAI_ENDPOINT']}/openai/deployments/your-deployment",
-        system_prompt="你是一个有用的助手。",
+async def async_example():
+    """使用异步 API，不阻塞事件循环"""
+
+    agent = create_agent(
+        api_key=os.environ.get("OPENAI_API_KEY", "test-key"),
+        model="gpt-4o",
+        sessions={},
     )
-    
-    agent.register_builtin_tools()
-    agent.run("你好！")
+
+    session = agent.create_session(
+        session_id="integration-async",
+        output_mode=OutputMode.CONTENT_ONLY,
+    )
+
+    # 异步运行
+    await agent.run_async(session.session_id, "用一句话解释递归")
+
+    # 异步迭代事件
+    async for event in session.events():
+        if event.event_type == "stream_token":
+            print(event.content, end="", flush=True)
+    print()
+
+    # 或者直接获取完整回复
+    response = await agent.wait_response_async(session.session_id)
+    print(f"完整回复: {response}")
 
 
 # ============================================
-# 4. 本地模型（Ollama, vLLM 等）
+# 4. 并发多 Session
 # ============================================
 
-def local_model_ollama():
-    """使用 Ollama 本地模型"""
-    
-    agent = Agent(
-        api_key="ollama",  # Ollama 不需要真实 key
-        model="llama3",  # 本地模型名称
-        session_id="integration-tools",
-        base_url="http://localhost:11434/v1",  # Ollama 默认端点
-        system_prompt="你是一个有用的助手。",
-    )
-    
-    agent.register_builtin_tools()
-    agent.run("你好！")
+async def concurrent_sessions():
+    """多个 Session 并发运行"""
 
-
-def local_model_vllm():
-    """使用 vLLM 本地模型"""
-    
-    agent = Agent(
-        api_key="vllm",  # vLLM 不需要真实 key
-        model="meta-llama/Llama-3-8B-Instruct",
-        session_id="integration-context",
-        base_url="http://localhost:8000/v1",  # vLLM 默认端点
-        system_prompt="你是一个有用的助手。",
+    agent = create_agent(
+        api_key=os.environ.get("OPENAI_API_KEY", "test-key"),
+        model="gpt-4o",
+        sessions={},
     )
-    
-    agent.register_builtin_tools()
-    agent.run("你好！")
+
+    s1 = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+    s2 = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+
+    # 两个 Session 并发运行
+    async def run_session(session, prompt, label):
+        await agent.run_async(session.session_id, prompt)
+        async for event in session.events():
+            if event.event_type == "stream_token":
+                print(f"{label}: {event.content}", end="", flush=True)
+        print()
+
+    await asyncio.gather(
+        run_session(s1, "什么是递归？", "S1"),
+        run_session(s2, "什么是闭包？", "S2"),
+    )
 
 
 # ============================================
@@ -118,65 +135,25 @@ def local_model_vllm():
 
 class MyCalculatorTool:
     """自定义计算器工具"""
-    
+
     def definition(self):
-        return ToolDefinition(
+        from pi_agent import PyToolDefinition
+        return PyToolDefinition(
             name="calculator",
             description="执行数学计算",
             parameters='{"type": "object", "properties": {"expression": {"type": "string"}}, "required": ["expression"]}'
         )
-    
+
     def execute(self, args):
         import json
         data = json.loads(args) if isinstance(args, str) else args
         expression = data.get("expression", "")
-        
+
         try:
             result = eval(expression)
             return str(result)
         except Exception as e:
             return f"计算错误: {e}"
-
-
-def custom_tool_usage():
-    """使用自定义工具"""
-    
-    agent = Agent(
-        api_key=os.environ["OPENAI_API_KEY"],
-        model="gpt-4o",
-        session_id="integration-error",
-    )
-    
-    agent.register_builtin_tools()
-    agent.register_tool(MyCalculatorTool())
-    
-    agent.run("计算 2 + 3 * 4")
-    
-    while True:
-        event = agent.next_event()
-        if event is None:
-            break
-        if event.event_type == "message_end":
-            print(f"结果: {event.content}")
-
-
-# ============================================
-# 会话管理
-# ============================================
-
-def session_management():
-    """会话持久化和恢复"""
-    
-    session = Session("gpt-4o", "你是一个有用的助手。")
-    
-    session.append_user("问题1")
-    session.append_assistant("回答1")
-    
-    messages = session.messages()
-    print(f"会话中有 {len(messages)} 条消息")
-    
-    branch_points = session.branch_points()
-    print(f"有 {len(branch_points)} 个分支点")
 
 
 # ============================================
@@ -188,29 +165,20 @@ if __name__ == "__main__":
     print("=" * 50)
     print()
     print("选择要运行的示例:")
-    print("1. basic_openai()        - OpenAI API")
-    print("2. custom_api()          - 自定义 API 端点")
-    print("3. azure_openai()        - Azure OpenAI")
-    print("4. local_model_ollama()  - Ollama 本地模型")
-    print("5. local_model_vllm()    - vLLM 本地模型")
-    print("6. custom_tool_usage()   - 自定义工具")
-    print("7. session_management()  - 会话管理")
-    
-    choice = input("\n输入选择 (1-7): ").strip()
-    
+    print("1. basic_sync()           - 同步基础用法")
+    print("2. custom_api()           - 自定义 API 端点")
+    print("3. async_example()        - 异步用法")
+    print("4. concurrent_sessions()  - 并发多 Session")
+
+    choice = input("\n输入选择 (1-4): ").strip()
+
     if choice == "1":
-        basic_openai()
+        basic_sync()
     elif choice == "2":
         custom_api()
     elif choice == "3":
-        azure_openai()
+        asyncio.run(async_example())
     elif choice == "4":
-        local_model_ollama()
-    elif choice == "5":
-        local_model_vllm()
-    elif choice == "6":
-        custom_tool_usage()
-    elif choice == "7":
-        session_management()
+        asyncio.run(concurrent_sessions())
     else:
         print("无效选择")

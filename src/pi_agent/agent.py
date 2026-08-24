@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import threading
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .logging import Logger
 from .prompts import PromptSet, load_prompt_set
@@ -23,6 +24,9 @@ class Agent:
 
     管理 LLM 连接、工具注册和多个 Session。
     使用者通过 create_session() 创建会话，而非直接构造 Agent。
+
+    所有方法均为异步兼容设计。使用 run_async() / wait_response_async()
+    获得真正的异步体验；同步 run() 仍在内部阻塞当前线程。
     """
 
     def __init__(
@@ -158,11 +162,22 @@ class Agent:
         return False
 
     def run(self, session_id: str, prompt: str) -> None:
-        """对指定会话运行一轮对话。"""
+        """对指定会话运行一轮对话（同步，阻塞直到完成）。"""
         session = self.get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
         session.run(prompt)
+
+    async def run_async(self, session_id: str, prompt: str) -> None:
+        """对指定会话运行一轮对话（异步，不阻塞事件循环）。
+
+        底层在 Tokio 运行时上执行 Rust Agent loop，事件通过
+        broadcast channel 实时发送，可通过 session.events() 异步迭代。
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        await session.run_async(prompt)
 
     def next_event(self, session_id: str) -> Any | None:
         """获取指定会话的下一个事件。"""
@@ -172,11 +187,18 @@ class Agent:
         return session.next_event()
 
     def wait_response(self, session_id: str, timeout: float = 300.0) -> str:
-        """等待指定会话的完整回复。"""
+        """等待指定会话的完整回复（同步）。"""
         session = self.get_session(session_id)
         if session is None:
             raise ValueError(f"Session {session_id} not found")
         return session.wait_response(timeout=timeout)
+
+    async def wait_response_async(self, session_id: str, timeout: float = 300.0) -> str:
+        """等待指定会话的完整回复（异步）。"""
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        return await session.wait_response_async(timeout=timeout)
 
     def register_builtin_tools(self) -> None:
         """注册内置工具到所有后续创建的 session。"""

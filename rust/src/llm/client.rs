@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::Client;
@@ -33,7 +34,7 @@ pub struct LlmClient {
     /// Base URL for the API.
     base_url: String,
     /// Event sink for structured diagnostics.
-    debug_sender: Option<broadcast::Sender<AgentEvent>>,
+    debug_sender: Option<Arc<broadcast::Sender<AgentEvent>>>,
 }
 
 impl LlmClient {
@@ -41,7 +42,7 @@ impl LlmClient {
     pub fn new(
         api_key: String,
         base_url: Option<String>,
-        debug_sender: Option<broadcast::Sender<AgentEvent>>,
+        debug_sender: Option<Arc<broadcast::Sender<AgentEvent>>>,
     ) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))

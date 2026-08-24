@@ -1,10 +1,11 @@
-"""Pi Agent - 编程代理，支持多会话、流式输出、工具调用和上下文压缩。
+"""Pi Agent - 编程代理，支持多会话、异步流式输出、工具调用和上下文压缩。
 
 架构：
     - 单个 Agent 实例管理多个 Session
     - 每个 Session 拥有独立的会话历史和事件缓冲区
     - 事件缓冲区根据 OutputMode 过滤输出
     - 所有提示词可通过外部 .md 文件加载
+    - 支持真正的异步 API：run_async() / events() / wait_response_async()
 
 快速开始：
     from pi_agent import create_agent, OutputMode
@@ -15,8 +16,15 @@
     )
 
     session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
-    agent.run(session.session_id, "hello")
+
+    # 同步
+    await agent.run_async(session.session_id, "hello")
     print(session.wait_response())
+
+    # 异步迭代
+    await agent.run_async(session.session_id, "hello")
+    async for event in session.events():
+        print(event.content, end="")
 """
 
 from importlib import import_module as _im

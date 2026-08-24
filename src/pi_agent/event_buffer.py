@@ -1,14 +1,18 @@
-"""Event buffer with output mode filtering."""
+"""Event buffer with output mode filtering and async iteration support."""
 
+import asyncio
 import threading
 from collections import deque
-from typing import Any
+from typing import Any, AsyncIterator
 
 from .types import OutputMode
 
 
 class EventBuffer:
-    """线程安全的事件缓冲区，根据 OutputMode 过滤输出事件。"""
+    """线程安全的事件缓冲区，根据 OutputMode 过滤输出事件。
+
+    支持同步 get() 和异步 async_get() 两种读取方式。
+    """
 
     def __init__(self, output_mode: OutputMode = OutputMode.CONTENT_ONLY):
         self._mode = output_mode
@@ -37,6 +41,13 @@ class EventBuffer:
             if not self._buffer:
                 return None
             return self._buffer.popleft()
+
+    async def async_get(self) -> Any | None:
+        """异步从缓冲区取出一个事件，若为空返回 None。
+
+        使用 asyncio.to_thread 避免阻塞事件循环。
+        """
+        return await asyncio.to_thread(self.get)
 
     def peek(self) -> Any | None:
         """查看缓冲区头部事件但不取出。"""
