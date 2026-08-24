@@ -94,6 +94,11 @@ impl AgentLoop {
         self.cancel_flag.clone()
     }
 
+    /// Get the event sender (for sending events from spawned tasks).
+    pub fn event_sender(&self) -> Arc<broadcast::Sender<AgentEvent>> {
+        self.event_sender.clone()
+    }
+
     /// Check if the task has been cancelled.
     fn is_cancelled(&self) -> bool {
         self.cancel_flag.load(Ordering::Relaxed)
@@ -180,138 +185,222 @@ impl AgentLoop {
             // Create tool definitions
             let tool_defs: Vec<ToolDefinition> = self.tool_registry.definitions();
 
-            // Call LLM with streaming
-            let response = self
-                .llm_client
-                .chat_completion_stream(&crate::llm::ChatCompletionRequest {
-                    model: self.config.model.clone(),
-                    messages: llm_messages,
-                    stream: None,
-                    max_tokens: Some(self.config.reserve_tokens),
-                    temperature: None,
-                    tools: if tool_defs.is_empty() {
-                        None
-                    } else {
-                        Some(
-                            tool_defs
-                                .iter()
-                                .map(|t| crate::llm::ChatTool {
-                                    tool_type: "function".to_string(),
-                                    function: crate::llm::ChatFunction {
-                                        name: t.name.clone(),
-                                        description: t.description.clone(),
-                                        parameters: t.parameters.clone(),
-                                    },
-                                })
-                                .collect(),
-                        )
-                    },
-                })
-                .await?;
-
-            // Process stream in real-time - true streaming
-            use futures::StreamExt;
-            let mut stream = response.bytes_stream();
+            // Retry loop for LLM call + stream processing
+            let max_retries = self.config.max_retries;
+            let mut last_error: Option<AgentError> = None;
             let mut full_content = String::new();
             let mut tool_calls: Option<Vec<crate::llm::ChatToolCall>> = None;
             let mut usage = crate::session::Usage::default();
-            let mut buffer = String::new();
-            let mut stream_done = false;
-            let mut chunk_count = 0u32;
 
-            while let Some(chunk_result) = stream.next().await {
-                let chunk = chunk_result.map_err(|e| AgentError::Llm(crate::llm::LlmError::Http(e)))?;
-                chunk_count += 1;
-                buffer.push_str(&String::from_utf8_lossy(&chunk));
+            for attempt in 0..=max_retries {
+                // Check for cancellation before each attempt
+                if self.is_cancelled() {
+                    let _ = self.event_sender.send(AgentEvent::Debug {
+                        source: "agent".to_string(),
+                        level: "info".to_string(),
+                        message: "Task cancelled by user".to_string(),
+                    });
+                    return Ok(());
+                }
 
-                // Process complete lines
-                while let Some(newline_pos) = buffer.find('\n') {
-                    let line = buffer[..newline_pos].to_string();
-                    buffer = buffer[newline_pos + 1..].to_string();
+                if attempt > 0 {
+                    // Exponential backoff: 1s, 2s, 4s, 8s, 16s, 30s cap
+                    let delay_secs = std::cmp::min(1u64 << (attempt - 1), 30);
+                    let _ = self.event_sender.send(AgentEvent::Debug {
+                        source: "agent".to_string(),
+                        level: "warning".to_string(),
+                        message: format!(
+                            "Retrying LLM call (attempt {}/{}, wait {}s)...",
+                            attempt + 1,
+                            max_retries + 1,
+                            delay_secs,
+                        ),
+                    });
+                    tokio::time::sleep(std::time::Duration::from_secs(delay_secs)).await;
+                }
 
-                    let line = line.trim();
-                    if line.is_empty() {
+                // Call LLM with streaming
+                let request = self.llm_client.chat_completion_stream(
+                    &crate::llm::ChatCompletionRequest {
+                        model: self.config.model.clone(),
+                        messages: llm_messages.clone(),
+                        stream: None,
+                        max_tokens: Some(self.config.reserve_tokens),
+                        temperature: None,
+                        tools: if tool_defs.is_empty() {
+                            None
+                        } else {
+                            Some(
+                                tool_defs
+                                    .iter()
+                                    .map(|t| crate::llm::ChatTool {
+                                        tool_type: "function".to_string(),
+                                        function: crate::llm::ChatFunction {
+                                            name: t.name.clone(),
+                                            description: t.description.clone(),
+                                            parameters: t.parameters.clone(),
+                                        },
+                                    })
+                                    .collect(),
+                            )
+                        },
+                    },
+                ).await;
+
+                let response = match request {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_error = Some(AgentError::Llm(e));
+                        let _ = self.event_sender.send(AgentEvent::Debug {
+                            source: "agent".to_string(),
+                            level: "error".to_string(),
+                            message: format!(
+                                "LLM request failed (attempt {}/{}): {}",
+                                attempt + 1,
+                                max_retries + 1,
+                                last_error.as_ref().unwrap(),
+                            ),
+                        });
                         continue;
                     }
+                };
 
-                    if let Some(data) = line.strip_prefix("data: ") {
-                        if data == "[DONE]" {
-                            stream_done = true;
-                            break;
-                        }
+                // Process stream in real-time - true streaming
+                use futures::StreamExt;
+                let mut stream = response.bytes_stream();
+                full_content.clear();
+                tool_calls = None;
+                usage = crate::session::Usage::default();
+                let mut buffer = String::new();
+                let mut stream_done = false;
+                let mut chunk_count = 0u32;
+                let mut stream_error: Option<AgentError> = None;
 
-                        if let Ok(chunk) = serde_json::from_str::<crate::llm::ChatCompletionChunk>(data) {
-                            // Emit stream tokens immediately as they arrive
-                            if let Some(choice) = chunk.choices.first() {
-                                if let Some(content) = &choice.delta.content {
-                                    if !content.is_empty() {
-                                        full_content.push_str(content);
-                                        let _ = self.event_sender.send(AgentEvent::StreamToken {
-                                            token: content.clone(),
-                                        });
-                                    }
+                while let Some(chunk_result) = stream.next().await {
+                    match chunk_result {
+                        Ok(chunk) => {
+                            chunk_count += 1;
+                            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+                            // Process complete lines
+                            while let Some(newline_pos) = buffer.find('\n') {
+                                let line = buffer[..newline_pos].to_string();
+                                buffer = buffer[newline_pos + 1..].to_string();
+
+                                let line = line.trim();
+                                if line.is_empty() {
+                                    continue;
                                 }
-                            }
 
-                            // Collect tool calls from chunks
-                            if let Some(choice) = chunk.choices.first() {
-                                if let Some(calls) = &choice.delta.tool_calls {
-                                    if tool_calls.is_none() {
-                                        tool_calls = Some(Vec::new());
+                                if let Some(data) = line.strip_prefix("data: ") {
+                                    if data == "[DONE]" {
+                                        stream_done = true;
+                                        break;
                                     }
-                                    for tc in calls {
-                                        if let Some(ref mut existing) = tool_calls {
-                                            let idx = tc.index as usize;
-                                            while existing.len() <= idx {
-                                                existing.push(crate::llm::ChatToolCall {
-                                                    id: String::new(),
-                                                    function: crate::llm::ChatFunctionCall {
-                                                        name: String::new(),
-                                                        arguments: String::new(),
-                                                    },
-                                                    call_type: "function".to_string(),
-                                                });
-                                            }
-                                            if let Some(id) = &tc.id {
-                                                existing[idx].id = id.clone();
-                                            }
-                                            if let Some(func) = &tc.function {
-                                                if let Some(name) = &func.name {
-                                                    existing[idx].function.name.push_str(name);
-                                                }
-                                                if let Some(args) = &func.arguments {
-                                                    existing[idx].function.arguments.push_str(args);
+
+                                    if let Ok(chunk) = serde_json::from_str::<crate::llm::ChatCompletionChunk>(data) {
+                                        // Emit stream tokens immediately as they arrive
+                                        if let Some(choice) = chunk.choices.first() {
+                                            if let Some(content) = &choice.delta.content {
+                                                if !content.is_empty() {
+                                                    full_content.push_str(content);
+                                                    let _ = self.event_sender.send(AgentEvent::StreamToken {
+                                                        token: content.clone(),
+                                                    });
                                                 }
                                             }
+                                        }
+
+                                        // Collect tool calls from chunks
+                                        if let Some(choice) = chunk.choices.first() {
+                                            if let Some(calls) = &choice.delta.tool_calls {
+                                                if tool_calls.is_none() {
+                                                    tool_calls = Some(Vec::new());
+                                                }
+                                                for tc in calls {
+                                                    if let Some(ref mut existing) = tool_calls {
+                                                        let idx = tc.index as usize;
+                                                        while existing.len() <= idx {
+                                                            existing.push(crate::llm::ChatToolCall {
+                                                                id: String::new(),
+                                                                function: crate::llm::ChatFunctionCall {
+                                                                    name: String::new(),
+                                                                    arguments: String::new(),
+                                                                },
+                                                                call_type: "function".to_string(),
+                                                            });
+                                                        }
+                                                        if let Some(id) = &tc.id {
+                                                            existing[idx].id = id.clone();
+                                                        }
+                                                        if let Some(func) = &tc.function {
+                                                            if let Some(name) = &func.name {
+                                                                existing[idx].function.name.push_str(name);
+                                                            }
+                                                            if let Some(args) = &func.arguments {
+                                                                existing[idx].function.arguments.push_str(args);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+
+                                        // Collect usage
+                                        if let Some(u) = &chunk.usage {
+                                            usage.input_tokens = u.prompt_tokens;
+                                            usage.output_tokens = u.completion_tokens;
                                         }
                                     }
                                 }
                             }
 
-                            // Collect usage
-                            if let Some(u) = &chunk.usage {
-                                usage.input_tokens = u.prompt_tokens;
-                                usage.output_tokens = u.completion_tokens;
+                            if stream_done {
+                                break;
                             }
+                        }
+                        Err(e) => {
+                            stream_error = Some(AgentError::Llm(crate::llm::LlmError::Http(e)));
+                            break;
                         }
                     }
                 }
-                
-                if stream_done {
-                    break;
+
+                // If stream had an error, retry
+                if let Some(e) = stream_error {
+                    last_error = Some(e);
+                    let _ = self.event_sender.send(AgentEvent::Debug {
+                        source: "agent".to_string(),
+                        level: "error".to_string(),
+                        message: format!(
+                            "Stream failed (attempt {}/{}): {}",
+                            attempt + 1,
+                            max_retries + 1,
+                            last_error.as_ref().unwrap(),
+                        ),
+                    });
+                    continue;
                 }
+
+                // Success - break out of retry loop
+                let _ = self.event_sender.send(AgentEvent::Debug {
+                    source: "agent.stream".to_string(),
+                    level: "debug".to_string(),
+                    message: format!(
+                        "Stream complete: {} chunks, {} chars, tool_calls={}",
+                        chunk_count,
+                        full_content.len(),
+                        tool_calls.is_some()
+                    ),
+                });
+                last_error = None;
+                break;
             }
 
-            let _ = self.event_sender.send(AgentEvent::Debug {
-                source: "agent.stream".to_string(),
-                level: "debug".to_string(),
-                message: format!(
-                    "Stream complete: {} chunks, {} chars, tool_calls={}",
-                    chunk_count,
-                    full_content.len(),
-                    tool_calls.is_some()
-                ),
-            });
+            // If all retries failed, return the last error
+            if let Some(e) = last_error {
+                return Err(e);
+            }
             if let Some(ref tc) = tool_calls {
                 let _ = self.event_sender.send(AgentEvent::Debug {
                     source: "agent.stream".to_string(),

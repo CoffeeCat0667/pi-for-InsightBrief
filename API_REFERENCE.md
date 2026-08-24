@@ -1,12 +1,12 @@
 # Pi Agent API Reference
 
-当前文档对应 `v0.1.5`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
+当前文档对应 `v0.1.6`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
 
 ## 安装
 
 ```bash
 # Windows x64 wheel，兼容 Python 3.10+
-pip install pi_agent-0.1.5-cp310-abi3-win_amd64.whl
+pip install pi_agent-0.1.6-cp310-abi3-win_amd64.whl
 
 # 从源码构建
 maturin develop --release
@@ -26,7 +26,7 @@ create_agent() -> 全局 Agent
 - `Agent` 保存 API 配置、提示词配置和 Session 注册表。
 - `Session` 保存一个独立的 Rust 会话树、事件缓冲区和输出模式。
 - `Agent` 通过 `create_agent()` 获取全局单例；同一 Python 进程内重复调用不会创建第二个 Agent。
-- **v0.1.5 异步架构**：Rust 持久化 Tokio 运行时，`run()` 在后台 Tokio task 上执行并释放 GIL。Python 可在 `run_async()` 期间通过 `events()` 异步迭代实时接收事件。
+- **v0.1.6 异步架构**：Rust 持久化 Tokio 运行时，`run()` 在后台 Tokio task 上执行并释放 GIL。Python 可在 `run_async()` 期间通过 `events()` 异步迭代实时接收事件。HTTP 错误（502/429/xxx）自动重试，最多 `max_retries` 次（默认 10），采用指数退避策略。
 - 多 Session 并发：每个 Session 拥有独立的 NativeAgent 和 broadcast channel，可同时运行多个 Session 的请求。
 
 ## 快速开始
@@ -115,6 +115,7 @@ asyncio.run(concurrent_example())
 | `log_level` | `LogLevel.INFO` | 日志级别 |
 | `log_buffer` | `None` | 自定义文本日志缓冲区；默认使用内部日志列表 |
 | `max_turns` | `50` | 单次 prompt 的最大 Agent turn 数 |
+| `max_retries` | `10` | LLM 调用失败时的最大重试次数（HTTP 502/429/xxx 等错误） |
 | `reserve_tokens` | `16384` | 为模型响应预留的 token 数 |
 | `keep_recent_tokens` | `20000` | 上下文压缩时保留的最近 token 数 |
 | `context_window` | `128000` | 上下文窗口大小 |
@@ -139,6 +140,7 @@ agent = create_agent(
     base_url="https://api.example.com/v1",
     log_level=LogLevel.DEBUG,
     max_turns=20,
+    max_retries=5,
     extra_guidelines=["回答使用中文", "修改文件前先读取文件内容"],
 )
 ```
@@ -335,7 +337,7 @@ event.debug_message   # str | None: debug message
 | `tool_call_end` | 工具调用完成 | `tool_call_id` |
 | `compaction_start` | 上下文压缩开始 | 无额外属性 |
 | `compaction_end` | 上下文压缩完成 | `summary` |
-| `debug` | Rust/LLM 诊断信息，仅 FULL_DEBUG 返回 | `source`, `level`, `debug_message` |
+| `debug` | Rust/LLM 诊断信息；error 级别始终返回，其余仅 FULL_DEBUG 返回 | `source`, `level`, `debug_message` |
 
 ## 提示词
 

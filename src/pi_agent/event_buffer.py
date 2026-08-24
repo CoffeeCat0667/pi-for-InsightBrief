@@ -81,6 +81,10 @@ class EventBuffer:
         if self._mode == OutputMode.FULL_DEBUG:
             return True
 
+        # Always surface error-level debug events so users see failure reasons
+        if event_type == "debug" and getattr(event, "level", None) == "error":
+            return True
+
         if self._mode == OutputMode.THINKING:
             return event_type in (
                 "stream_token",

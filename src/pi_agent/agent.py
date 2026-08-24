@@ -38,6 +38,7 @@ class Agent:
         log_level: LogLevel = LogLevel.INFO,
         log_buffer: Any = None,
         max_turns: int = 50,
+        max_retries: int = 10,
         reserve_tokens: int = 16384,
         keep_recent_tokens: int = 20000,
         context_window: int = 128000,
@@ -55,6 +56,7 @@ class Agent:
         self._model = model
         self._base_url = base_url
         self._max_turns = max_turns
+        self._max_retries = max_retries
         self._reserve_tokens = reserve_tokens
         self._keep_recent_tokens = keep_recent_tokens
         self._context_window = context_window
@@ -217,6 +219,7 @@ class Agent:
             "session_data": self._session_data,
             "base_url": self._base_url,
             "max_turns": self._max_turns,
+            "max_retries": self._max_retries,
             "reserve_tokens": self._reserve_tokens,
             "keep_recent_tokens": self._keep_recent_tokens,
             "context_window": self._context_window,
@@ -262,6 +265,8 @@ def create_agent(**kwargs: Any) -> Agent:
             _agent_instance._api_key = kwargs.get("api_key", _agent_instance._api_key)
             _agent_instance._model = kwargs.get("model", _agent_instance._model)
             _agent_instance._base_url = kwargs.get("base_url", _agent_instance._base_url)
+            if "max_retries" in kwargs:
+                _agent_instance._max_retries = kwargs["max_retries"]
             if "sessions" in kwargs and kwargs["sessions"] is not None:
                 _agent_instance._session_data = kwargs["sessions"]
             if "log_level" in kwargs:

@@ -81,6 +81,8 @@ pub struct AgentLoopConfig {
     pub model: String,
     /// Maximum number of turns per prompt.
     pub max_turns: u32,
+    /// Maximum number of retries on HTTP errors for each LLM call.
+    pub max_retries: u32,
     /// Reserve tokens for the response.
     pub reserve_tokens: u32,
     /// Keep recent tokens un-compacted.
@@ -99,6 +101,7 @@ impl Default for AgentLoopConfig {
         Self {
             model: "gpt-4o".to_string(),
             max_turns: 50,
+            max_retries: 10,
             reserve_tokens: 16384,
             keep_recent_tokens: 20000,
             context_window: 128000,

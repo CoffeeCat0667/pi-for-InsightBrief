@@ -117,8 +117,8 @@ summary: "压缩摘要"
 
 ### `debug`
 
-Rust Agent 或 LLM 客户端产生的诊断信息。该事件只在
-`OutputMode.FULL_DEBUG` 下返回。
+Rust Agent 或 LLM 客户端产生的诊断信息。`error` 级别的 debug 事件在所有
+`OutputMode` 下均返回，其余仅在 `OutputMode.FULL_DEBUG` 下返回。
 
 ```text
 event_type: "debug"
@@ -134,7 +134,7 @@ debug_message: "POST https://api.example.com/v1/chat/completions (model=gpt-4o, 
 | `llm` | LLM 请求、响应、连接和 HTTP 错误 |
 | `agent.stream` | SSE 流处理统计和工具调用收集状态 |
 | `session` | 会话写入等状态 |
-| `agent` | Agent 循环状态（如任务取消） |
+| `agent` | Agent 循环状态（如任务取消、重试） |
 
 当前 `level` 值包括：
 
@@ -142,8 +142,8 @@ debug_message: "POST https://api.example.com/v1/chat/completions (model=gpt-4o, 
 |---|---|
 | `debug` | 调试信息 |
 | `info` | 普通状态信息 |
-| `warning` | 警告 |
-| `error` | 请求或执行错误 |
+| `warning` | 警告（如重试等待） |
+| `error` | 请求或执行错误（始终返回） |
 
 ## OutputMode 过滤
 
@@ -159,7 +159,8 @@ debug_message: "POST https://api.example.com/v1/chat/completions (model=gpt-4o, 
 | `turn_end` | 否 | 是 | 是 |
 | `agent_start` | 否 | 否 | 是 |
 | `agent_end` | 否 | 否 | 是 |
-| `debug` | 否 | 否 | 是 |
+| `debug` (error) | **是** | **是** | **是** |
+| `debug` (其他) | 否 | 否 | 是 |
 
 ## 最终回答与 DEBUG 分离
 
@@ -200,7 +201,7 @@ DEBUG 事件通过 Session 的事件缓冲区返回，不再由 Rust 直接写�
 
 ## 异步事件流
 
-v0.1.5 引入真正的异步事件流。Rust Agent loop 在 Tokio 运行时上执行，事件通过
+v0.1.6 引入真正的异步事件流和 HTTP 错误自动重试。Rust Agent loop 在 Tokio 运行时上执行，事件通过
 broadcast channel 实时发送。Python 通过 `events()` 异步迭代器实时接收：
 
 ```python
@@ -211,9 +212,21 @@ async for event in session.events():
         print(event.content, end="", flush=True)
     elif event.event_type == "tool_call_start":
         print(f"\n[工具: {event.tool_name}]")
+    elif event.event_type == "debug" and event.level == "error":
+        print(f"\n[错误: {event.debug_message}]")
 ```
 
 `events()` 会在以下情况结束迭代：
 - 收到 `agent_end` 事件
 - 超时（默认 300 秒）
 - 原生 agent 停止运行且缓冲区为空
+
+## HTTP 错误自动重试
+
+v0.1.6 起，LLM 调用遇到 HTTP 错误（502/429/503/xxx）时自动重试：
+- 最多重试 `max_retries` 次（默认 10）
+- 采用指数退避：1s, 2s, 4s, 8s, 16s, 30s 封顶
+- 每次重试前检查 `cancel_flag`，用户可随时取消
+- 重试期间发送 `warning` 级别 debug 事件，用户可实时观察重试进度
+- 所有重试失败后，发送 `error` 级别 debug 事件并终止任务
+- `running` flag 始终正确重置，不会卡死

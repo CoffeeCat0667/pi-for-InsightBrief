@@ -82,15 +82,15 @@ pub struct PyAgent {
     event_receiver: broadcast::Receiver<AgentEvent>,
     /// Cancellation flag shared with the spawned task.
     cancel_flag: Arc<std::sync::atomic::AtomicBool>,
-    /// Whether a task is currently running.
-    running: bool,
+    /// Whether a task is currently running. Shared so spawned task can reset it.
+    running: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[pymethods]
 impl PyAgent {
     /// Create a new agent.
     #[new]
-    #[pyo3(signature = (api_key, model, session_id, session_data=None, base_url=None, system_prompt=None, max_turns=None, reserve_tokens=None, keep_recent_tokens=None, context_window=None, append_system_prompt=None, extra_guidelines=None, cwd=None))]
+    #[pyo3(signature = (api_key, model, session_id, session_data=None, base_url=None, system_prompt=None, max_turns=None, max_retries=None, reserve_tokens=None, keep_recent_tokens=None, context_window=None, append_system_prompt=None, extra_guidelines=None, cwd=None))]
     fn new(
         py: Python<'_>,
         api_key: &str,
@@ -100,6 +100,7 @@ impl PyAgent {
         base_url: Option<&str>,
         system_prompt: Option<&str>,
         max_turns: Option<u32>,
+        max_retries: Option<u32>,
         reserve_tokens: Option<u32>,
         keep_recent_tokens: Option<u32>,
         context_window: Option<u32>,
@@ -164,6 +165,7 @@ impl PyAgent {
         let config = AgentLoopConfig {
             model: model.to_string(),
             max_turns: max_turns.unwrap_or(50),
+            max_retries: max_retries.unwrap_or(10),
             reserve_tokens: reserve_tokens.unwrap_or(16384),
             keep_recent_tokens: keep_recent_tokens.unwrap_or(20000),
             context_window: context_window.unwrap_or(128000),
@@ -192,7 +194,7 @@ impl PyAgent {
             runtime,
             event_receiver,
             cancel_flag,
-            running: false,
+            running: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
     }
 
@@ -201,17 +203,19 @@ impl PyAgent {
     /// Spawns a background Tokio task and releases the GIL during execution.
     /// Events are broadcast in real-time and can be polled via `next_event()`.
     fn run(&mut self, prompt: &str) -> PyResult<()> {
-        if self.running {
+        if self.running.load(Ordering::Relaxed) {
             return Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
                 "A task is already running. Use cancel() to stop it first."
             ));
         }
 
-        self.running = true;
+        self.running.store(true, Ordering::Relaxed);
         self.cancel_flag.store(false, Ordering::Relaxed);
 
         let agent = self.agent.clone();
         let prompt = prompt.to_string();
+        let running = self.running.clone();
+        let sender = agent.event_sender();
 
         // Spawn the task on the Tokio runtime.
         // The task runs on Tokio's thread pool, independent of the GIL.
@@ -220,7 +224,20 @@ impl PyAgent {
         // 2. The spawned task doesn't need the GIL
         // 3. The GIL is released when this method returns to Python
         self.runtime.spawn(async move {
-            let _ = agent.run(&prompt).await;
+            let result = agent.run(&prompt).await;
+
+            // Always reset running flag when task completes
+            running.store(false, Ordering::Relaxed);
+
+            // If the agent loop returned an error, emit an error event so Python
+            // can see what went wrong instead of silently swallowing it.
+            if let Err(e) = result {
+                let _ = sender.send(AgentEvent::Debug {
+                    source: "agent".to_string(),
+                    level: "error".to_string(),
+                    message: format!("Agent failed: {}", e),
+                });
+            }
         });
 
         Ok(())
@@ -235,13 +252,13 @@ impl PyAgent {
             Ok(event) => {
                 // Check if this is the AgentEnd event (task finished)
                 if matches!(event, AgentEvent::AgentEnd { .. }) {
-                    self.running = false;
+                    self.running.store(false, Ordering::Relaxed);
                 }
                 Some(PyAgentEvent { inner: event })
             }
             Err(broadcast::error::TryRecvError::Empty) => None,
             Err(broadcast::error::TryRecvError::Closed) => {
-                self.running = false;
+                self.running.store(false, Ordering::Relaxed);
                 None
             }
             Err(_) => None,
@@ -250,7 +267,7 @@ impl PyAgent {
 
     /// Check if the agent task is currently running.
     fn is_running(&self) -> bool {
-        self.running
+        self.running.load(Ordering::Relaxed)
     }
 
     /// Cancel the currently running task (cooperative cancellation).
@@ -265,11 +282,11 @@ impl PyAgent {
     /// This blocks the Python thread until the agent finishes.
     /// Prefer polling `next_event()` + `is_running()` for async usage.
     fn wait_done(&mut self) {
-        if !self.running {
+        if !self.running.load(Ordering::Relaxed) {
             return;
         }
         // Drain events while waiting
-        while self.running {
+        while self.running.load(Ordering::Relaxed) {
             self.next_event();
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
