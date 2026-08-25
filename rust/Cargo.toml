@@ -1,6 +1,6 @@
 [package]
 name = "pi_agent"
-version = "0.1.7"
+version = "0.1.8"
 edition = "2021"
 description = "Pi Agent - A coding agent with session management and context compaction"
 license = "MIT"

@@ -1,6 +1,6 @@
 # Pi Agent 项目上下文
 
-最后更新: v0.1.7 (2026-08-25)
+最后更新: v0.1.8 (2026-08-25)
 
 ## 项目概述
 
@@ -46,7 +46,7 @@ set "PATH=D:\rustup\cargo\bin;%PATH%"
 ```
 pi-agent/
 ├── rust/                          # Rust 核心
-│   ├── Cargo.toml                 # v0.1.7
+│   ├── Cargo.toml                 # v0.1.8
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── agent/
@@ -81,7 +81,7 @@ pi-agent/
 │   ├── logging.py                 # Logger
 │   └── prompts.py                 # PromptSet 加载
 ├── dist/                          # 构建产物
-│   └── pi_agent-0.1.7-cp310-abi3-win_amd64.whl
+│   └── pi_agent-0.1.8-cp310-abi3-win_amd64.whl
 ├── API_REFERENCE.md               # API 文档
 ├── output_content.md              # 输出事件格式文档
 └── pyproject.toml                 # Python 包配置
@@ -141,6 +141,10 @@ session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 - AgentEnd content 缺失
 - `truncate_str` UTF-8 panic
 
+### v0.1.8
+- 修复 `Session.stream()` 启动竞态：`events()` 在 `run_async` 尚未启动时把"未启动"（`is_running()==False`）误判为"已结束"，导致首轮空回复、第二轮泄漏上一轮遗留事件
+- `stream()` 在遍历 `events()` 前等待任务真正启动（`while not run_task.done() and not is_running(): sleep`）
+
 ### v0.1.7
 - 新增 `Session.stream()` 方法：合并 `run_async()` + `events()`，一行代码获得实时事件流
 - 新增 `Agent.stream()` 方法，与 `run_async()` 同级
@@ -172,7 +176,7 @@ python test_async_api.py
 
 - URL: https://github.com/CoffeeCat0667/pi-for-InsightBrief.git
 - 当前分支: main
-- 最新提交: v0.1.7
+- 最新提交: v0.1.8
 
 ## 使用示例
 
@@ -203,7 +207,7 @@ async def main():
     print()
 ```
 
-### 流式 API (v0.1.7+)
+### 流式 API (v0.1.8+)
 ```python
 import asyncio
 from pi_agent import create_agent, OutputMode

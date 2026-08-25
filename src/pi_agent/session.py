@@ -243,6 +243,13 @@ class Session:
         """
         run_task = asyncio.ensure_future(self.run_async(prompt))
 
+        # Wait for run_async to actually start (or finish) before consuming events.
+        # events() would otherwise misread "task not yet started" (is_running()==False)
+        # as "task already finished" and return immediately, dropping the whole round
+        # and leaking leftover events into the next request.
+        while not run_task.done() and not self._native_agent.is_running():
+            await asyncio.sleep(0.01)
+
         try:
             async for event in self.events(timeout=timeout):
                 yield event
