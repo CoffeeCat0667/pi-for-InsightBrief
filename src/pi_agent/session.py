@@ -188,9 +188,6 @@ class Session:
             data = await asyncio.to_thread(self._native_agent.export_session_data)
             self._session_data[self._session_id] = json.loads(data)
 
-        # Drain any remaining events
-        self._drain_native_events()
-
     async def events(self, timeout: float = 300.0) -> AsyncIterator[Any]:
         """异步迭代器，实时 yield 符合 output_mode 的事件。
 
@@ -230,6 +227,28 @@ class Session:
 
             # No events yet, yield control to the event loop
             await asyncio.sleep(0.01)
+
+    async def stream(
+        self, prompt: str, timeout: float = 300.0
+    ) -> AsyncIterator[Any]:
+        """启动对话并实时流式返回事件（合并 run_async + events）。
+
+        一行代码即可获得实时事件流，无需手动管理 run_async 和 events()。
+
+        用法::
+
+            async for event in session.stream("你好"):
+                if event.event_type == "stream_token":
+                    print(event.content, end="")
+        """
+        run_task = asyncio.ensure_future(self.run_async(prompt))
+
+        try:
+            async for event in self.events(timeout=timeout):
+                yield event
+        finally:
+            # Ensure the wrapper task is observed so failures are propagated.
+            await run_task
 
     async def wait_response_async(self, timeout: float = 300.0) -> str:
         """等待并返回完整回复文本（异步）。"""

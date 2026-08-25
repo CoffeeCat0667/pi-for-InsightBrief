@@ -104,7 +104,7 @@ impl Default for AgentLoopConfig {
             max_retries: 10,
             reserve_tokens: 16384,
             keep_recent_tokens: 20000,
-            context_window: 128000,
+            context_window: 256000,
             prompt_set: PromptSet::defaults(),
             extra_guidelines: Vec::new(),
         }

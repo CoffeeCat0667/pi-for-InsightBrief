@@ -5,7 +5,7 @@
     - 每个 Session 拥有独立的会话历史和事件缓冲区
     - 事件缓冲区根据 OutputMode 过滤输出
     - 所有提示词可通过外部 .md 文件加载
-    - 支持真正的异步 API：run_async() / events() / wait_response_async()
+    - 支持真正的异步 API：run_async() / events() / stream() / wait_response_async()
 
 快速开始：
     from pi_agent import create_agent, OutputMode
@@ -21,9 +21,8 @@
     await agent.run_async(session.session_id, "hello")
     print(session.wait_response())
 
-    # 异步迭代
-    await agent.run_async(session.session_id, "hello")
-    async for event in session.events():
+    # 流式（推荐）
+    async for event in agent.stream(session.session_id, "hello"):
         print(event.content, end="")
 """
 

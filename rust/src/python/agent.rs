@@ -168,7 +168,7 @@ impl PyAgent {
             max_retries: max_retries.unwrap_or(10),
             reserve_tokens: reserve_tokens.unwrap_or(16384),
             keep_recent_tokens: keep_recent_tokens.unwrap_or(20000),
-            context_window: context_window.unwrap_or(128000),
+            context_window: context_window.unwrap_or(256000),
             prompt_set,
             extra_guidelines: extra_guidelines.unwrap_or_default(),
         };

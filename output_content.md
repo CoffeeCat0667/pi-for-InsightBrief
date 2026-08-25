@@ -201,8 +201,16 @@ DEBUG 事件通过 Session 的事件缓冲区返回，不再由 Rust 直接写�
 
 ## 异步事件流
 
-v0.1.6 引入真正的异步事件流和 HTTP 错误自动重试。Rust Agent loop 在 Tokio 运行时上执行，事件通过
-broadcast channel 实时发送。Python 通过 `events()` 异步迭代器实时接收：
+v0.1.7 在 v0.1.6 的基础上提供一行式 `stream()` API。Rust Agent loop 在 Tokio 运行时上执行，事件通过
+broadcast channel 实时发送。推荐直接使用 `stream()`；向后兼容的 `run_async()` + `events()` 组合仍然可用：
+
+```python
+async for event in session.stream("你的消息"):
+    if event.event_type == "stream_token":
+        print(event.content, end="", flush=True)
+```
+
+等价的旧式调用方式：
 
 ```python
 await session.run_async("你的消息")
@@ -223,7 +231,7 @@ async for event in session.events():
 
 ## HTTP 错误自动重试
 
-v0.1.6 起，LLM 调用遇到 HTTP 错误（502/429/503/xxx）时自动重试：
+v0.1.6 起，LLM 调用遇到 HTTP 错误（502/429/503/xxx）时自动重试，v0.1.7 继续保持该行为：
 - 最多重试 `max_retries` 次（默认 10）
 - 采用指数退避：1s, 2s, 4s, 8s, 16s, 30s 封顶
 - 每次重试前检查 `cancel_flag`，用户可随时取消

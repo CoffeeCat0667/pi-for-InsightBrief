@@ -41,7 +41,7 @@ class Agent:
         max_retries: int = 10,
         reserve_tokens: int = 16384,
         keep_recent_tokens: int = 20000,
-        context_window: int = 128000,
+        context_window: int = 256000,
         system_main: str | Path | None = None,
         compaction_system: str | Path | None = None,
         compaction_initial: str | Path | None = None,
@@ -180,6 +180,25 @@ class Agent:
         if session is None:
             raise ValueError(f"Session {session_id} not found")
         await session.run_async(prompt)
+
+    async def stream(
+        self, session_id: str, prompt: str, timeout: float = 300.0
+    ) -> AsyncIterator[Any]:
+        """对指定会话启动对话并实时流式返回事件。
+
+        合并 run_async + events()，一行代码获得实时事件流。
+
+        用法::
+
+            async for event in agent.stream(session_id, "你好"):
+                if event.event_type == "stream_token":
+                    print(event.content, end="")
+        """
+        session = self.get_session(session_id)
+        if session is None:
+            raise ValueError(f"Session {session_id} not found")
+        async for event in session.stream(prompt, timeout=timeout):
+            yield event
 
     def next_event(self, session_id: str) -> Any | None:
         """获取指定会话的下一个事件。"""

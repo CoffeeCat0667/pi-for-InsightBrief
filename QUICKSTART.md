@@ -1,4 +1,4 @@
-# Pi Agent 快速开始
+# Pi Agent v0.1.7 快速开始
 
 ## 安装
 
@@ -13,8 +13,11 @@ call .venv\Scripts\activate.bat  # Windows
 # 安装 maturin
 pip install maturin
 
-# 构建并安装
-maturin develop
+# 安装已构建 wheel
+pip install dist/pi_agent-0.1.7-cp310-abi3-win_amd64.whl
+
+# 或从源码构建并安装
+maturin develop --release
 ```
 
 ## 设置 API Key
@@ -44,30 +47,36 @@ cargo test
 ## 在你的项目中使用
 
 ```python
-from pi_agent import Agent, Session
+import asyncio
+from pi_agent import create_agent, OutputMode
 
-# 创建 Agent
-agent = Agent(
+agent = create_agent(
     api_key="sk-...",
     model="gpt-4o",
-    session_path="session.jsonl",
-    system_prompt="你是一个有用的助手。",
 )
+session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 
-# 注册内置工具
-agent.register_builtin_tools()
+async def main():
+    # v0.1.7 流式 API：自动启动请求并实时返回事件
+    async for event in session.stream("你好！"):
+        if event.event_type == "stream_token":
+            print(event.content, end="", flush=True)
+    print()
 
-# 运行对话
-agent.run("你好！")
+asyncio.run(main())
+```
 
-# 获取响应
-while True:
-    event = agent.next_event()
-    if event is None:
-        break
-    
-    if event.event_type == "message_end":
-        print(f"助手: {event.content}")
+## 向后兼容的异步 API
+
+```python
+async def legacy_async_main():
+    await session.run_async("用一句话解释递归")
+
+    async for event in session.events():
+        if event.event_type == "stream_token":
+            print(event.content, end="", flush=True)
+
+asyncio.run(legacy_async_main())
 ```
 
 ## 可用工具
@@ -81,40 +90,20 @@ while True:
 - `find` - 查找文件
 - `ls` - 列出目录
 
-## 自定义工具
-
-```python
-from pi_agent import Tool, ToolDefinition
-
-class MyTool:
-    def definition(self):
-        return ToolDefinition(
-            name="my_tool",
-            description="我的自定义工具",
-            parameters='{"type": "object", "properties": {"arg": {"type": "string"}}}'
-        )
-    
-    def execute(self, args):
-        return "工具执行结果"
-
-# 注册自定义工具
-agent.register_tool(MyTool())
-```
-
 ## 文件结构
 
 ```
 pi-agent/
-├── python/
-│   └── pi_agent/
-│       └── __init__.py          # Python 包
 ├── rust/
 │   └── src/                     # Rust 源码
+├── src/pi_agent/                # Python 高层 API
+├── dist/
+│   └── pi_agent-0.1.7-*.whl     # wheel 构建产物
 ├── examples/
 │   ├── complete_demo.py         # 完整示例
 │   └── integration.py           # 集成示例
 ├── test_basic.py                # 基础测试
-└── test_llm.py                  # LLM 测试
+└── test_async_api.py            # 异步 API 测试
 ```
 
 ## 更多信息

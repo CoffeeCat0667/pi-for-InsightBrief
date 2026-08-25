@@ -98,6 +98,38 @@ def test_native_agent_async_api():
     print("  [PASS] Native PyAgent async API works")
 
 
+def test_stream_method_exists():
+    """Test that stream() method exists on Session and Agent."""
+    from pi_agent import create_agent, OutputMode
+
+    agent = create_agent(api_key="test-key", model="gpt-4")
+    session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
+
+    assert hasattr(session, 'stream'), "Session should have stream()"
+    assert hasattr(agent, 'stream'), "Agent should have stream()"
+
+    # Verify stream is async generator (coroutine function returning AsyncIterator)
+    import inspect
+    assert inspect.isasyncgenfunction(session.stream), "Session.stream should be async generator"
+
+    print("  [PASS] stream() method exists")
+
+
+def test_run_async_no_drain():
+    """Test that run_async doesn't drain events (events consumed by events/stream)."""
+    from pi_agent import create_agent
+    import inspect
+
+    agent = create_agent(api_key="test-key", model="gpt-4")
+    session = agent.create_session()
+
+    source = inspect.getsource(session.run_async)
+    assert '_drain_native_events' not in source, \
+        "run_async() should not call _drain_native_events()"
+
+    print("  [PASS] run_async does not drain events")
+
+
 def main():
     print("Pi Agent Async API Tests")
     print("=" * 50)
@@ -108,6 +140,8 @@ def main():
     test_sync_api_still_works()
     test_event_buffer_async()
     test_native_agent_async_api()
+    test_stream_method_exists()
+    test_run_async_no_drain()
 
     print("=" * 50)
     print("All async API tests passed!")
