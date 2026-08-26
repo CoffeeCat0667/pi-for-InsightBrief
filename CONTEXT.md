@@ -1,6 +1,6 @@
 # Pi Agent 项目上下文
 
-最后更新: v0.1.8 (2026-08-25)
+最后更新: v0.1.9 (2026-08-25)
 
 ## 项目概述
 
@@ -46,7 +46,7 @@ set "PATH=D:\rustup\cargo\bin;%PATH%"
 ```
 pi-agent/
 ├── rust/                          # Rust 核心
-│   ├── Cargo.toml                 # v0.1.8
+│   ├── Cargo.toml                 # v0.1.9
 │   ├── src/
 │   │   ├── lib.rs
 │   │   ├── agent/
@@ -81,7 +81,7 @@ pi-agent/
 │   ├── logging.py                 # Logger
 │   └── prompts.py                 # PromptSet 加载
 ├── dist/                          # 构建产物
-│   └── pi_agent-0.1.8-cp310-abi3-win_amd64.whl
+│   └── pi_agent-0.1.9-cp310-abi3-win_amd64.whl
 ├── API_REFERENCE.md               # API 文档
 ├── output_content.md              # 输出事件格式文档
 └── pyproject.toml                 # Python 包配置
@@ -141,6 +141,11 @@ session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 - AgentEnd content 缺失
 - `truncate_str` UTF-8 panic
 
+### v0.1.9
+- 修复 `analyze_compaction` 上下文高估：原逻辑逐条累加每条 assistant entry 的 `input_tokens`（每轮都是完整请求输入），导致上下文被高估几十倍、几乎每轮误触发压缩
+- 改为取当前活跃分支最新一条 assistant entry 的 `input_tokens` 作为真实当前上下文，再与 `context_window - reserve_tokens` 比较
+- `CompactionAnalysis::total_tokens` 增加语义注释，明确为"当前待发送上下文"而非"历史请求之和"
+
 ### v0.1.8
 - 修复 `Session.stream()` 启动竞态：`events()` 在 `run_async` 尚未启动时把"未启动"（`is_running()==False`）误判为"已结束"，导致首轮空回复、第二轮泄漏上一轮遗留事件
 - `stream()` 在遍历 `events()` 前等待任务真正启动（`while not run_task.done() and not is_running(): sleep`）
@@ -176,7 +181,7 @@ python test_async_api.py
 
 - URL: https://github.com/CoffeeCat0667/pi-for-InsightBrief.git
 - 当前分支: main
-- 最新提交: v0.1.8
+- 最新提交: v0.1.9
 
 ## 使用示例
 

@@ -1,12 +1,12 @@
 # Pi Agent API Reference
 
-当前文档对应 `v0.1.8`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
+当前文档对应 `v0.1.9`。Pi Agent 提供一个 Python API 层，以及底层 Rust/PyO3 类型。
 
 ## 安装
 
 ```bash
 # Windows x64 wheel，兼容 Python 3.10+
-pip install pi_agent-0.1.8-cp310-abi3-win_amd64.whl
+pip install pi_agent-0.1.9-cp310-abi3-win_amd64.whl
 
 # 从源码构建
 maturin develop --release
@@ -26,7 +26,7 @@ create_agent() -> 全局 Agent
 - `Agent` 保存 API 配置、提示词配置和 Session 注册表。
 - `Session` 保存一个独立的 Rust 会话树、事件缓冲区和输出模式。
 - `Agent` 通过 `create_agent()` 获取全局单例；同一 Python 进程内重复调用不会创建第二个 Agent。
-- **v0.1.8 异步架构**：Rust 持久化 Tokio 运行时，`run()` 在后台 Tokio task 上执行并释放 GIL。Python 可在 `run_async()` 期间通过 `events()` 异步迭代实时接收事件。新增 `stream()` 方法，一步合并 `run_async()` + `events()`，并修复了启动竞态：`stream()` 会先等待 `run_async` 真正启动再消费事件，避免首轮空回复和跨轮事件泄漏。HTTP 错误（502/429/xxx）自动重试，最多 `max_retries` 次（默认 10），采用指数退避策略。
+- **v0.1.9 异步架构**：Rust 持久化 Tokio 运行时，`run()` 在后台 Tokio task 上执行并释放 GIL。Python 可在 `run_async()` 期间通过 `events()` 异步迭代实时接收事件。新增 `stream()` 方法，一步合并 `run_async()` + `events()`，并修复了启动竞态。HTTP 错误（502/429/xxx）自动重试，最多 `max_retries` 次（默认 10），采用指数退避策略。v0.1.9 还修复了上下文压缩判定：`analyze_compaction` 不再逐条累加历史 `input_tokens`（那会高估上下文几十倍、几乎每轮误触发压缩），改为取当前活跃分支最新一条 assistant entry 的 `input_tokens` 作为真实当前上下文。
 - 多 Session 并发：每个 Session 拥有独立的 NativeAgent 和 broadcast channel，可同时运行多个 Session 的请求。
 
 ## 快速开始
@@ -168,7 +168,7 @@ response = agent.wait_response(session.session_id, timeout=300.0)
 await agent.run_async(session.session_id, "你的消息")
 response = await agent.wait_response_async(session.session_id, timeout=300.0)
 
-# 流式（v0.1.8+，推荐）
+# 流式（v0.1.9+，推荐）
 async for event in agent.stream(session.session_id, "你的消息"):
     if event.event_type == "stream_token":
         print(event.content, end="")
@@ -259,7 +259,7 @@ async for event in session.events(timeout=300.0):
     if event.event_type == "stream_token":
         print(event.content, end="")
 
-# 流式（v0.1.8+，推荐）
+# 流式（v0.1.9+，推荐）
 async for event in session.stream("你的消息", timeout=300.0):
     if event.event_type == "stream_token":
         print(event.content, end="")

@@ -236,7 +236,7 @@ async for event in session.events():
 
 ## HTTP 错误自动重试
 
-v0.1.6 起，LLM 调用遇到 HTTP 错误（502/429/503/xxx）时自动重试，v0.1.8 继续保持该行为：
+v0.1.6 起，LLM 调用遇到 HTTP 错误（502/429/503/xxx）时自动重试，v0.1.9 继续保持该行为：
 - 最多重试 `max_retries` 次（默认 10）
 - 采用指数退避：1s, 2s, 4s, 8s, 16s, 30s 封顶
 - 每次重试前检查 `cancel_flag`，用户可随时取消

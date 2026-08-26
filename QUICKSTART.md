@@ -1,4 +1,4 @@
-# Pi Agent v0.1.8 快速开始
+# Pi Agent v0.1.9 快速开始
 
 ## 安装
 
@@ -14,7 +14,7 @@ call .venv\Scripts\activate.bat  # Windows
 pip install maturin
 
 # 安装已构建 wheel
-pip install dist/pi_agent-0.1.8-cp310-abi3-win_amd64.whl
+pip install dist/pi_agent-0.1.9-cp310-abi3-win_amd64.whl
 
 # 或从源码构建并安装
 maturin develop --release
@@ -57,7 +57,7 @@ agent = create_agent(
 session = agent.create_session(output_mode=OutputMode.CONTENT_ONLY)
 
 async def main():
-    # v0.1.8 流式 API：自动启动请求并实时返回事件（已修复启动竞态）
+    # v0.1.9 流式 API：自动启动请求并实时返回事件（已修复启动竞态）
     async for event in session.stream("你好！"):
         if event.event_type == "stream_token":
             print(event.content, end="", flush=True)
@@ -98,7 +98,7 @@ pi-agent/
 │   └── src/                     # Rust 源码
 ├── src/pi_agent/                # Python 高层 API
 ├── dist/
-│   └── pi_agent-0.1.8-*.whl     # wheel 构建产物
+│   └── pi_agent-0.1.9-*.whl     # wheel 构建产物
 ├── examples/
 │   ├── complete_demo.py         # 完整示例
 │   └── integration.py           # 集成示例
